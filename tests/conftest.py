@@ -11,9 +11,11 @@ from app.schemas import UserRead
 
 
 @pytest.fixture
-def app() -> FastAPI:
+def app(tmp_path: str) -> FastAPI:
+    database_path = tmp_path / "test.db"
     settings = Settings(
         app_name="Products API Test",
+        database_url=f"sqlite+pysqlite:///{database_path.as_posix()}",
         debug=False,
         api_prefix="/api/v1",
         jwt_secret_key="test-secret-not-for-production-but-it-is-30-chars-long-at-least",

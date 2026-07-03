@@ -1,16 +1,18 @@
 from functools import lru_cache
-from typing import Annotated
+from typing import Annotated, Iterator
 
 import jwt
 from fastapi import Depends, Path, HTTPException
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from jwt import InvalidTokenError
 from pydantic import ValidationError
+from sqlalchemy.orm import Session
 from starlette.requests import Request
 from starlette.status import HTTP_404_NOT_FOUND, HTTP_403_FORBIDDEN, \
     HTTP_401_UNAUTHORIZED
 
 from app.core.config import Settings
+from app.models import Product
 from app.schemas import ProductRead, UserRead, TokenPayload
 from app.storage import ProductStorage, UserStorage
 
@@ -23,11 +25,12 @@ def get_user_storage(request: Request) -> UserStorage:
     return request.app.state.user_storage
 
 
+
 def get_product_or_404(
         product_id: Annotated[int, Path(ge=1)],
-        storage: StorageDep,
-) -> ProductRead:
-    product = storage.get(product_id)
+        session: SessionDep,
+) -> Product:
+    product = session.get(Product, product_id)
     if product is None:
         raise HTTPException(
             status_code=HTTP_404_NOT_FOUND,
@@ -46,10 +49,8 @@ SettingsDep = Annotated[
     Depends(get_settings),
 ]
 
-ProductDep = Annotated[
-    ProductRead,
-    Depends(get_product_or_404),
-]
+ProductDep = Annotated[Product, Depends(get_product_or_404)]
+
 StorageDep = Annotated[
     ProductStorage,
     Depends(get_product_storage),
@@ -131,3 +132,12 @@ def decode_access_token(token: str, settings: Settings) -> TokenPayload:
         raise InvalidTokenError("Unexpected token type")
 
     return token_data
+
+
+def get_session(request: Request) -> Iterator[Session]:
+    session_factory = request.app.state.session_factory
+    with session_factory() as session:
+        yield session
+
+
+SessionDep = Annotated[Session, Depends(get_session)]

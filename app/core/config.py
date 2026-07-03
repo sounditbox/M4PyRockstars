@@ -1,8 +1,9 @@
-from pydantic import SecretStr, ConfigDict
+from pydantic import SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
+    database_url: str = "sqlite+pysqlite:///./products.db"
     app_name: str = "Products API"
     debug: bool = False
     api_prefix: str = "/api/v1"

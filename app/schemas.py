@@ -65,6 +65,8 @@ class ProductUpdate(BaseModel):
 class ProductRead(ProductBase):
     id: int
 
+    model_config = ConfigDict(from_attributes=True)
+
 
 class ProductInternal(ProductRead):
     supplier_code: str

@@ -9,5 +9,5 @@ async def test_list_products_async(app):
         transport = ASGITransport(app=manager.app)
         async with AsyncClient(transport=transport, base_url="http://test"
                                ) as client:
-            response = await client.get("/api/v1/products/")
+            response = await client.get("/api/v1/products")
     assert response.status_code == 200

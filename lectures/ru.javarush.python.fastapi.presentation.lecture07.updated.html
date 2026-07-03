@@ -1,0 +1,1293 @@
+<!doctype html>
+<html lang="ru" class="light">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link href="https://super-dev-styles.github.io/website-assets/styles.css" rel="stylesheet">
+  <link href="https://super-dev-styles.github.io/website-assets/view.css" rel="stylesheet">
+  <link href="https://super-dev-styles.github.io/website-assets/slides.css" rel="stylesheet">
+  <script src="https://super-dev-styles.github.io/website-assets/slides.js" defer></script>
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism.min.css" rel="stylesheet">
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/plugins/line-numbers/prism-line-numbers.min.css" rel="stylesheet">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-core.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/plugins/autoloader/prism-autoloader.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/plugins/line-numbers/prism-line-numbers.min.js"></script>
+  <title>Лекция 7: SQLAlchemy 2.0 в FastAPI — модели, сессии и CRUD</title>
+</head>
+<body>
+<div class="content lecture-content post-content">
+  <db-content>
+    <h1>Лекция 7: SQLAlchemy 2.0 в FastAPI — модели, сессии и CRUD</h1>
+    <p>In-memory-словарь исчезает при перезапуске процесса и не умеет обеспечивать транзакции, ограничения и конкурентный доступ. Перенесём товары в SQLite через современный API SQLAlchemy 2.0.</p>
+    <p>Сначала разберём Engine, ORM-модель и Session, затем перепишем CRUD и подключим базу к FastAPI через dependency injection.</p>
+    <hr>
+
+    <h2>Стартовая точка</h2>
+    <pre><code>project/
+├── app/
+│   ├── main.py
+│   ├── lifespan.py
+│   ├── schemas.py
+│   ├── storage.py
+│   ├── security.py
+│   ├── dependencies.py
+│   ├── core/
+│   │   └── config.py
+│   └── routers/
+│       ├── auth.py
+│       └── products.py
+├── tests/
+└── pyproject.toml
+</code></pre>
+    <p><code>ProductStorage</code> хранит товары в словаре. Пользователи пока остаются в <code>UserStorage</code>: в этой лекции меняем один слой за раз.</p>
+    <hr>
+
+    <h2>Что такое SQLAlchemy</h2>
+    <p><b>SQLAlchemy</b> — Python-библиотека для работы с реляционными базами данных. В ней есть два тесно связанных уровня:</p>
+    <table>
+      <thead>
+      <tr>
+        <th>Уровень</th>
+        <th>Назначение</th>
+      </tr>
+      </thead>
+      <tbody>
+      <tr>
+        <td>SQL Expression Language / Core</td>
+        <td>строит SQL-выражения и выполняет их через соединения</td>
+      </tr>
+      <tr>
+        <td>ORM</td>
+        <td>связывает строки таблиц с Python-объектами</td>
+      </tr>
+      </tbody>
+    </table>
+    <p>ORM не отменяет SQL. Она генерирует SQL и управляет состоянием объектов, но разработчику всё равно нужно понимать таблицы, ключи, индексы и транзакции.</p>
+    <hr>
+
+    <h2>SQL Expression Language</h2>
+    <p>Запрос SQLAlchemy — не строка, а дерево Python-объектов, которое описывает SQL-конструкцию.</p>
+    <pre class="language-python"><code>statement = (
+    select(Product)
+    .where(Product.category == "electronics")
+    .where(Product.price &lt; 100)
+    .order_by(Product.price)
+    .limit(20)
+)
+</code></pre>
+    <p><code>select()</code>, <code>where()</code> и <code>order_by()</code> создают SQL expression objects. Пока мы только строим <code>statement</code>, запрос в базу ещё не отправляется.</p>
+    <hr>
+
+    <h2>Как выражение превращается в результат</h2>
+    <pre><code>Python-выражение
+select(Product).where(Product.price &lt; 100)
+        ↓
+дерево SQLAlchemy Expression Language
+        ↓
+dialect компилирует SQL под SQLite / PostgreSQL
+        ↓
+DBAPI driver отправляет SQL + параметры
+        ↓
+база выполняет запрос
+        ↓
+Result / ScalarResult / ORM-объекты
+</code></pre>
+    <p>SQLAlchemy разделяет описание запроса и его выполнение. Один и тот же statement можно вывести для отладки, дополнить условиями и только потом передать в <code>Session</code>.</p>
+    <hr>
+
+    <h2>Запросы собираются композиционно</h2>
+    <p>Методы statement работают в generative-стиле: возвращают новый объект с добавленной частью запроса.</p>
+    <pre class="language-python"><code>statement = select(Product)
+
+if category is not None:
+    statement = statement.where(Product.category == category)
+
+if only_available:
+    statement = statement.where(
+        Product.is_available.is_(True)
+    )
+
+statement = statement.order_by(Product.id)
+</code></pre>
+    <p>Так удобно строить запрос из необязательных query-параметров. Исходный <code>select(Product)</code> не изменяется «на месте» — переменная получает новую версию statement.</p>
+    <hr>
+
+    <h2>Основные конструкции языка</h2>
+    <table>
+      <thead>
+      <tr>
+        <th>SQLAlchemy</th>
+        <th>Роль в SQL</th>
+      </tr>
+      </thead>
+      <tbody>
+      <tr>
+        <td><code>select(Product)</code></td>
+        <td><code>SELECT ... FROM products</code></td>
+      </tr>
+      <tr>
+        <td><code>.where(condition)</code></td>
+        <td><code>WHERE</code></td>
+      </tr>
+      <tr>
+        <td><code>.join(Model)</code></td>
+        <td><code>JOIN</code></td>
+      </tr>
+      <tr>
+        <td><code>.order_by(...)</code></td>
+        <td><code>ORDER BY</code></td>
+      </tr>
+      <tr>
+        <td><code>.limit(n).offset(k)</code></td>
+        <td>ограничение и смещение результата</td>
+      </tr>
+      <tr>
+        <td><code>insert()</code>, <code>update()</code>, <code>delete()</code></td>
+        <td>явные DML-выражения</td>
+      </tr>
+      <tr>
+        <td><code>func.count()</code>, <code>func.sum()</code></td>
+        <td>SQL-функции и агрегаты</td>
+      </tr>
+      </tbody>
+    </table>
+    <p>В ORM обычные одиночные изменения чаще выражаются через работу с объектом и Session. Явные <code>update()</code> и <code>delete()</code> особенно полезны для массовых операций.</p>
+    <hr>
+
+    <h2>Python-операторы становятся SQL</h2>
+    <table>
+      <thead>
+      <tr>
+        <th>Python-выражение</th>
+        <th>SQL-смысл</th>
+      </tr>
+      </thead>
+      <tbody>
+      <tr>
+        <td><code>Product.price &gt; 100</code></td>
+        <td><code>price &gt; :price_1</code></td>
+      </tr>
+      <tr>
+        <td><code>Product.category == "books"</code></td>
+        <td><code>category = :category_1</code></td>
+      </tr>
+      <tr>
+        <td><code>Product.id.in_([1, 2, 3])</code></td>
+        <td><code>id IN (...)</code></td>
+      </tr>
+      <tr>
+        <td><code>Product.description.is_(None)</code></td>
+        <td><code>description IS NULL</code></td>
+      </tr>
+      <tr>
+        <td><code>and_(a, b)</code>, <code>or_(a, b)</code></td>
+        <td>логические <code>AND</code> и <code>OR</code></td>
+      </tr>
+      </tbody>
+    </table>
+    <p>У class attributes вроде <code>Product.price</code> операторы перегружены: результатом сравнения становится SQL expression, а не обычный Python <code>bool</code>.</p>
+    <hr>
+
+    <h2>Связанные параметры вместо склейки строк</h2>
+    <pre class="language-python"><code>statement = select(Product).where(
+    Product.category == category
+)
+</code></pre>
+    <p>Упрощённо SQLAlchemy скомпилирует выражение так:</p>
+    <pre class="language-sql"><code>SELECT products.id, products.name, products.category
+FROM products
+WHERE products.category = :category_1
+</code></pre>
+    <p>Само значение <code>category</code> передаётся драйверу отдельно — как данные параметра, а не как SQL-код. Поэтому пользовательский ввод не становится исполняемым фрагментом запроса.</p>
+    <p>Не делайте так:</p>
+    <pre class="language-python"><code># Небезопасно: пользовательское значение склеено с SQL
+sql = f"SELECT * FROM products WHERE category = '{category}'"
+</code></pre>
+    <hr>
+
+    <h2><code>execute()</code>, <code>scalars()</code> и <code>scalar()</code></h2>
+    <table>
+      <thead>
+      <tr>
+        <th>Вызов</th>
+        <th>Возвращает</th>
+        <th>Когда использовать</th>
+      </tr>
+      </thead>
+      <tbody>
+      <tr>
+        <td><code>session.execute(statement)</code></td>
+        <td><code>Result</code> со строками <code>Row</code></td>
+        <td>выбрано несколько колонок или сущностей</td>
+      </tr>
+      <tr>
+        <td><code>session.scalars(statement)</code></td>
+        <td><code>ScalarResult</code> с первым элементом каждой строки</td>
+        <td>нужен список ORM-объектов или значений одной колонки</td>
+      </tr>
+      <tr>
+        <td><code>session.scalar(statement)</code></td>
+        <td>первый элемент первой строки или <code>None</code></td>
+        <td>нужно одно число, значение или первый объект</td>
+      </tr>
+      </tbody>
+    </table>
+    <pre class="language-python"><code>statement = select(Product)
+
+rows = session.execute(statement).all()
+# [(Product(id=1, name="Keyboard"),),
+#  (Product(id=2, name="Mouse"),)]
+
+products = session.scalars(statement).all()
+# [Product(id=1, name="Keyboard"),
+#  Product(id=2, name="Mouse")]
+</code></pre>
+    <p><code>execute()</code> сохраняет структуру строк результата. Даже если выбран один ORM-класс, каждая строка содержит один элемент: <code>(Product(...),)</code>.</p>
+    <p><code>scalars()</code> снимает эту внешнюю строку и берёт первый элемент каждой строки. Он не преобразует данные в модели — ORM-объекты уже создала Session.</p>
+    <pre class="language-python"><code>statement = select(Product.name, Product.price)
+
+rows = session.execute(statement).all()
+# [("Keyboard", Decimal("99.90")),
+#  ("Mouse", Decimal("49.90"))]
+
+names = session.scalars(statement).all()
+# ["Keyboard", "Mouse"]
+# price отброшен: scalars() берёт первый элемент строки
+</code></pre>
+    <pre class="language-python"><code>count = session.scalar(
+    select(func.count(Product.id))
+)
+# 2
+
+first_name = session.scalar(
+    select(Product.name).order_by(Product.id)
+)
+# "Keyboard" или None, если строк нет
+</code></pre>
+    <p><code>scalar()</code> подходит для <code>count()</code>, <code>sum()</code> и других запросов с одним ожидаемым значением. Если важно потребовать ровно одну строку, используйте <code>session.scalars(statement).one()</code>; для варианта «ноль или одна» — <code>one_or_none()</code>.</p>
+    <hr>
+
+    <h2>Raw SQL остаётся доступен</h2>
+    <pre class="language-python"><code>from sqlalchemy import text
+
+
+statement = text(
+    "SELECT * FROM products WHERE category = :category"
+)
+rows = session.execute(
+    statement,
+    {"category": category},
+).all()
+</code></pre>
+    <p><code>text()</code> нужен для специфичного SQL, сложного отчёта или возможности базы, которую неудобно выразить другими конструкциями.</p>
+    <p>Даже в raw SQL значения передаются связанными параметрами. Expression Language обычно предпочтительнее: она композиционна, знает типы и адаптируется к dialect.</p>
+    <hr>
+
+    <h2>Основные объекты</h2>
+    <pre><code>database URL
+    ↓
+Engine ── connection pool ── DBAPI driver ── database
+    ↑
+Session ── transaction + identity map + ORM objects
+    ↑
+FastAPI dependency ── один HTTP-запрос
+</code></pre>
+    <ul>
+      <li><code>Engine</code> знает, как подключаться к базе, и управляет пулом соединений.</li>
+      <li>ORM-модель описывает соответствие Python-класса таблице.</li>
+      <li><code>Session</code> выполняет запросы и отслеживает изменения объектов в транзакции.</li>
+      <li>Driver реализует конкретный протокол: <code>sqlite3</code>, <code>psycopg</code> и другие.</li>
+    </ul>
+    <hr>
+
+    <h2>Устанавливаем SQLAlchemy</h2>
+    <pre class="language-bash"><code>uv add sqlalchemy
+</code></pre>
+    <p>Для SQLite отдельный пакет не нужен: драйвер <code>sqlite3</code> входит в стандартную библиотеку Python.</p>
+    <p>Для PostgreSQL понадобится драйвер:</p>
+    <pre class="language-bash"><code>uv add "psycopg[binary]"
+</code></pre>
+    <hr>
+
+    <h2>Database URL</h2>
+    <table>
+      <thead>
+      <tr>
+        <th>База</th>
+        <th>Пример URL</th>
+      </tr>
+      </thead>
+      <tbody>
+      <tr>
+        <td>SQLite-файл</td>
+        <td><code>sqlite+pysqlite:///./products.db</code></td>
+      </tr>
+      <tr>
+        <td>PostgreSQL</td>
+        <td><code>postgresql+psycopg://user:password@localhost/products</code></td>
+      </tr>
+      </tbody>
+    </table>
+    <p>Общая форма: <code>dialect+driver://credentials@host/database</code>. Пароль production-базы хранится в переменных окружения или secret manager, а не в репозитории.</p>
+    <hr>
+
+    <h2>Добавляем настройку базы</h2>
+    <p><b><code>app/core/config.py</code></b></p>
+    <pre class="language-python"><code>class Settings(BaseSettings):
+    app_name: str = "Products API"
+    api_prefix: str = "/api/v1"
+    database_url: str = "sqlite+pysqlite:///./products.db"
+
+    # JWT-настройки из предыдущей лекции остаются здесь
+</code></pre>
+    <p><b><code>.env</code></b></p>
+    <pre class="language-properties"><code>DATABASE_URL=sqlite+pysqlite:///./products.db
+</code></pre>
+    <p>Одинаковый код приложения сможет использовать SQLite локально и PostgreSQL в другом окружении.</p>
+    <hr>
+
+    <h2>Declarative Base</h2>
+    <p><b><code>app/models.py</code></b></p>
+    <pre class="language-python"><code>from sqlalchemy.orm import DeclarativeBase
+
+
+class Base(DeclarativeBase):
+    pass
+</code></pre>
+    <p><code>Base.metadata</code> будет содержать описание всех таблиц, чьи модели наследуются от <code>Base</code>.</p>
+    <hr>
+
+    <h2>Анатомия mapped-атрибута</h2>
+    <pre class="language-python"><code>name: Mapped[str] = mapped_column(String(80), index=True)
+# ①       ②              ③
+</code></pre>
+    <table>
+      <thead>
+      <tr>
+        <th>Часть</th>
+        <th>Что означает</th>
+      </tr>
+      </thead>
+      <tbody>
+      <tr>
+        <td>① <code>name</code></td>
+        <td>имя Python-атрибута; по умолчанию оно же станет именем SQL-столбца</td>
+      </tr>
+      <tr>
+        <td>② <code>Mapped[str]</code></td>
+        <td>ORM-атрибут, значение которого у экземпляра имеет Python-тип <code>str</code></td>
+      </tr>
+      <tr>
+        <td>③ <code>mapped_column(...)</code></td>
+        <td>настройки столбца и ORM-маппинга: SQL-тип, индекс, ключи, default и другие параметры</td>
+      </tr>
+      </tbody>
+    </table>
+    <p>Вместе левая и правая части дают SQLAlchemy достаточно информации, чтобы создать столбец таблицы и управляемый атрибут Python-класса.</p>
+    <hr>
+
+    <h2>Что такое <code>Mapped[T]</code></h2>
+    <p><code>Mapped</code> — специальный generic-тип SQLAlchemy. Он помечает атрибут как часть ORM-маппинга и сообщает ожидаемый Python-тип значения.</p>
+    <pre class="language-python"><code>id: Mapped[int]
+name: Mapped[str]
+description: Mapped[str | None]
+</code></pre>
+    <ul>
+      <li><code>Mapped[int]</code> означает: у экземпляра модели <code>product.id</code> читается как <code>int</code>.</li>
+      <li><code>Mapped[str | None]</code> разрешает значение <code>None</code> на уровне Python-типизации.</li>
+      <li>Аннотацию понимают SQLAlchemy, IDE, Pylance, mypy и другие type checkers.</li>
+      <li><code>Mapped</code> не заменяет Pydantic и не валидирует входной HTTP JSON.</li>
+    </ul>
+    <p>Тип <code>T</code> — это тип Python-значения, а не буквальное имя SQL-типа.</p>
+    <hr>
+
+    <h2>Атрибут класса и атрибут экземпляра</h2>
+    <p>У mapped-атрибута два режима работы:</p>
+    <pre class="language-python"><code>Product.price
+# ORM-выражение: можно использовать в select() и where()
+
+product = Product(price=99.90)
+product.price
+# Python-значение конкретного объекта
+</code></pre>
+    <table>
+      <thead>
+      <tr>
+        <th>Выражение</th>
+        <th>Смысл</th>
+      </tr>
+      </thead>
+      <tbody>
+      <tr>
+        <td><code>Product.price &gt; 100</code></td>
+        <td>SQLAlchemy строит условие SQL</td>
+      </tr>
+      <tr>
+        <td><code>product.price &gt; 100</code></td>
+        <td>Python сравнивает значение загруженного объекта</td>
+      </tr>
+      </tbody>
+    </table>
+    <p>SQLAlchemy заменяет обычный class attribute специальным descriptor. Благодаря этому одно имя работает и в запросах, и у экземпляров модели.</p>
+    <hr>
+
+    <h2>Что делает <code>mapped_column()</code></h2>
+    <p><code>mapped_column()</code> — declarative-конструкция SQLAlchemy 2.0 для описания столбца внутри ORM-класса.</p>
+    <pre class="language-python"><code>price: Mapped[Decimal] = mapped_column(
+    Numeric(12, 2),
+    nullable=False,
+    index=True,
+)
+</code></pre>
+    <p>При объявлении класса SQLAlchemy:</p>
+    <ol>
+      <li>создаёт объект <code>Column</code> в <code>Product.__table__</code>.</li>
+      <li>добавляет таблицу в <code>Base.metadata</code>.</li>
+      <li>создаёт ORM-маппинг между столбцом и атрибутом <code>Product.price</code>.</li>
+      <li>настраивает отслеживание изменений экземпляров внутри Session.</li>
+    </ol>
+    <p>В declarative-моделях <code>mapped_column()</code> заменяет привычный для старых примеров <code>Column()</code> и лучше работает с современной типизацией.</p>
+    <hr>
+
+    <h2>Что SQLAlchemy выводит автоматически</h2>
+    <p>Если тип и ограничения очевидны, SQLAlchemy умеет вывести SQL-тип и nullable из <code>Mapped[...]</code>:</p>
+    <pre class="language-python"><code>class Example(Base):
+    __tablename__ = "examples"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    title: Mapped[str]
+    note: Mapped[str | None]
+</code></pre>
+    <table>
+      <thead>
+      <tr>
+        <th>Объявление</th>
+        <th>Примерный результат в таблице</th>
+      </tr>
+      </thead>
+      <tbody>
+      <tr>
+        <td><code>Mapped[int]</code> + primary key</td>
+        <td><code>INTEGER PRIMARY KEY NOT NULL</code></td>
+      </tr>
+      <tr>
+        <td><code>Mapped[str]</code></td>
+        <td><code>VARCHAR NOT NULL</code></td>
+      </tr>
+      <tr>
+        <td><code>Mapped[str | None]</code></td>
+        <td><code>VARCHAR NULL</code></td>
+      </tr>
+      </tbody>
+    </table>
+    <p>Даже когда <code>mapped_column()</code> справа не указан, SQLAlchemy создаёт его неявно. В учебной модели мы оставляем явную правую часть там, где задаём длину, индекс, точность или другое ограничение.</p>
+    <hr>
+
+    <h2>Python-тип и SQL-тип</h2>
+    <p><code>Mapped[T]</code> описывает значение в Python. Первый позиционный аргумент <code>mapped_column()</code> может явно задавать тип столбца в базе:</p>
+    <table>
+      <thead>
+      <tr>
+        <th>Python / ORM</th>
+        <th>SQLAlchemy type</th>
+        <th>Типичная форма в БД</th>
+      </tr>
+      </thead>
+      <tbody>
+      <tr>
+        <td><code>Mapped[int]</code></td>
+        <td><code>Integer</code></td>
+        <td><code>INTEGER</code></td>
+      </tr>
+      <tr>
+        <td><code>Mapped[str]</code></td>
+        <td><code>String(80)</code></td>
+        <td><code>VARCHAR(80)</code></td>
+      </tr>
+      <tr>
+        <td><code>Mapped[Decimal]</code></td>
+        <td><code>Numeric(12, 2)</code></td>
+        <td><code>NUMERIC(12, 2)</code></td>
+      </tr>
+      <tr>
+        <td><code>Mapped[bool]</code></td>
+        <td><code>Boolean</code></td>
+        <td>зависит от диалекта</td>
+      </tr>
+      <tr>
+        <td><code>Mapped[dict[str, object]]</code></td>
+        <td><code>JSON</code></td>
+        <td><code>JSON</code>, <code>JSONB</code> или адаптация диалекта</td>
+      </tr>
+      </tbody>
+    </table>
+    <p>Явный SQLAlchemy type имеет приоритет над типом, который можно было бы вывести из аннотации. Конкретный DDL затем адаптирует dialect выбранной базы.</p>
+    <hr>
+
+    <h2><code>None</code> и <code>nullable</code></h2>
+    <pre class="language-python"><code>required: Mapped[str]
+# обычно NOT NULL
+
+optional: Mapped[str | None]
+# обычно NULL
+
+explicit: Mapped[
+    str | None
+] = mapped_column(
+    nullable=False
+)
+# Python-тип допускает None, но база отклонит NULL
+</code></pre>
+    <p>Приоритет определения nullability:</p>
+    <ol>
+      <li>явный <code>nullable=True</code> или <code>nullable=False</code>.</li>
+      <li><code>primary_key=True</code> подразумевает <code>NOT NULL</code>.</li>
+      <li>иначе <code>| None</code> внутри <code>Mapped</code> обычно означает <code>NULL</code>, а его отсутствие — <code>NOT NULL</code>.</li>
+    </ol>
+    <p>Обычно Python-тип и ограничение базы лучше держать согласованными. Намеренное расхождение требует понятной причины.</p>
+    <hr>
+
+    <h2>Основные параметры <code>mapped_column()</code></h2>
+    <table>
+      <thead>
+      <tr>
+        <th>Параметр</th>
+        <th>Назначение</th>
+      </tr>
+      </thead>
+      <tbody>
+      <tr>
+        <td><code>primary_key=True</code></td>
+        <td>столбец входит в первичный ключ</td>
+      </tr>
+      <tr>
+        <td><code>nullable=False</code></td>
+        <td>запрещает SQL <code>NULL</code></td>
+      </tr>
+      <tr>
+        <td><code>unique=True</code></td>
+        <td>создаёт одиночное ограничение уникальности</td>
+      </tr>
+      <tr>
+        <td><code>index=True</code></td>
+        <td>просит создать индекс для поиска и сортировки</td>
+      </tr>
+      <tr>
+        <td><code>default=...</code></td>
+        <td>значение формируется на стороне Python при INSERT</td>
+      </tr>
+      <tr>
+        <td><code>server_default=...</code></td>
+        <td>значение по умолчанию формирует сама база данных</td>
+      </tr>
+      <tr>
+        <td><code>ForeignKey(...)</code></td>
+        <td>связывает столбец с ключом другой таблицы</td>
+      </tr>
+      </tbody>
+    </table>
+    <p><code>index=True</code> не означает «всегда быстрее»: индекс занимает место и замедляет запись. Его добавляют под реальные запросы.</p>
+    <hr>
+
+    <h2><code>default</code> и <code>server_default</code></h2>
+    <pre class="language-python"><code>from datetime import datetime
+
+from sqlalchemy import DateTime, func
+
+
+is_available: Mapped[bool] = mapped_column(default=True)
+created_at: Mapped[datetime] = mapped_column(
+    DateTime(timezone=True),
+    server_default=func.now(),
+)
+</code></pre>
+    <table>
+      <thead>
+      <tr>
+        <th><code>default=True</code></th>
+        <th><code>server_default=func.now()</code></th>
+      </tr>
+      </thead>
+      <tbody>
+      <tr>
+        <td>SQLAlchemy подставляет значение в INSERT</td>
+        <td>DDL задаёт default на стороне базы</td>
+      </tr>
+      <tr>
+        <td>работает, когда запись идёт через этот SQLAlchemy mapping</td>
+        <td>работает и для других клиентов базы</td>
+      </tr>
+      <tr>
+        <td>не является значением обычного Python-атрибута сразу после <code>Product()</code></td>
+        <td>значение появляется после INSERT и может потребовать refresh</td>
+      </tr>
+      </tbody>
+    </table>
+    <p>Не путайте оба варианта со значением по умолчанию в Pydantic-схеме: это ещё один, внешний слой контракта.</p>
+    <hr>
+
+    <h2>Имя атрибута и имя SQL-столбца</h2>
+    <pre class="language-python"><code>class User(Base):
+    __tablename__ = "users"
+
+    id: Mapped[int] = mapped_column(
+        "user_id",
+        primary_key=True,
+    )
+</code></pre>
+    <p>В Python используем <code>User.id</code>, а в SQL столбец называется <code>user_id</code>. Если строковое имя не передано, SQLAlchemy берёт имя атрибута.</p>
+    <p>Разные имена полезны при подключении к существующей схеме, но в новом проекте одинаковые имена обычно проще.</p>
+    <hr>
+
+    <h2>ORM-модель товара</h2>
+    <p><b><code>app/models.py</code></b></p>
+    <pre class="language-python"><code>from decimal import Decimal
+
+from sqlalchemy import JSON, Boolean, Numeric, String
+from sqlalchemy.orm import Mapped, mapped_column
+
+
+class Product(Base):
+    __tablename__ = "products"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(80), index=True)
+    category: Mapped[str] = mapped_column(String(40), index=True)
+    price: Mapped[Decimal] = mapped_column(Numeric(12, 2))
+    sale_price: Mapped[Decimal | None] = mapped_column(
+        Numeric(12, 2), nullable=True
+    )
+    description: Mapped[str | None] = mapped_column(
+        String(500), nullable=True
+    )
+    is_available: Mapped[bool] = mapped_column(
+        Boolean, default=True
+    )
+    specs: Mapped[dict[str, object] | None] = mapped_column(
+        JSON, nullable=True
+    )
+</code></pre>
+    <p>Тип внутри <code>Mapped[...]</code> описывает Python-значение атрибута. <code>mapped_column()</code> задаёт свойства столбца базы данных.</p>
+    <hr>
+
+    <h2>Модель ORM и схема Pydantic — не одно и то же</h2>
+    <table>
+      <thead>
+      <tr>
+        <th>ORM-модель</th>
+        <th>Pydantic-схема</th>
+      </tr>
+      </thead>
+      <tbody>
+      <tr>
+        <td>описывает таблицу и хранение</td>
+        <td>описывает входной или выходной HTTP-контракт</td>
+      </tr>
+      <tr>
+        <td>участвует в Session</td>
+        <td>валидирует и сериализует данные</td>
+      </tr>
+      <tr>
+        <td>может содержать внутренние поля</td>
+        <td>показывает клиенту только разрешённые поля</td>
+      </tr>
+      </tbody>
+    </table>
+    <p>Не возвращаем таблицу «как есть» без публичной схемы: позже в модели могут появиться себестоимость, внутренний код поставщика или служебные флаги.</p>
+    <hr>
+
+    <h2>Pydantic читает атрибуты ORM</h2>
+    <p><b><code>app/schemas.py</code></b></p>
+    <pre class="language-python"><code>from pydantic import ConfigDict
+
+
+class ProductRead(ProductBase):
+    id: int
+
+    model_config = ConfigDict(from_attributes=True)
+</code></pre>
+    <p><code>from_attributes=True</code> разрешает Pydantic получать значения не только из словаря, но и из атрибутов ORM-объекта.</p>
+    <pre class="language-python"><code>public_product = ProductRead.model_validate(orm_product)
+</code></pre>
+    <hr>
+
+    <h2>Создаём Engine</h2>
+    <p><b><code>app/database.py</code></b></p>
+    <pre class="language-python"><code>from sqlalchemy import Engine, create_engine
+
+
+def create_database_engine(database_url: str) -&gt; Engine:
+    options = {}
+    if database_url.startswith("sqlite"):
+        options["connect_args"] = {"check_same_thread": False}
+
+    return create_engine(database_url, **options)
+</code></pre>
+    <p>FastAPI может выполнять синхронные endpoints в разных worker threads. Для учебного SQLite отключаем проверку, запрещающую использовать одно соединение за пределами создавшего его потока. Это не делает Session потокобезопасной.</p>
+    <hr>
+
+    <h2>Фабрика сессий</h2>
+    <p><b><code>app/database.py</code></b></p>
+    <pre class="language-python"><code>from sqlalchemy import Engine
+from sqlalchemy.orm import Session, sessionmaker
+
+
+def create_session_factory(
+    engine: Engine,
+) -&gt; sessionmaker[Session]:
+    return sessionmaker(
+        bind=engine,
+        class_=Session,
+        autoflush=False,
+        expire_on_commit=False,
+    )
+</code></pre>
+    <ul>
+      <li><code>autoflush=False</code> делает промежуточную отправку изменений более явной.</li>
+      <li><code>expire_on_commit=False</code> оставляет уже загруженные значения доступными после commit.</li>
+      <li>Фабрика создаёт новые Session; она сама не является Session.</li>
+    </ul>
+    <hr>
+
+    <h2>Инициализируем базу в lifespan</h2>
+    <p><b><code>app/lifespan.py</code></b></p>
+    <pre class="language-python"><code>from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+
+from fastapi import FastAPI
+
+from app.database import (
+    create_database_engine,
+    create_session_factory,
+)
+from app.models import Base
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI) -&gt; AsyncIterator[None]:
+    engine = create_database_engine(
+        app.state.settings.database_url
+    )
+    Base.metadata.create_all(bind=engine)
+
+    app.state.engine = engine
+    app.state.session_factory = create_session_factory(engine)
+
+    # Инициализация UserStorage из лекции 5 остаётся здесь
+    yield
+
+    engine.dispose()
+</code></pre>
+    <p>Engine создаётся один раз при старте, а <code>dispose()</code> освобождает соединения при остановке приложения.</p>
+    <hr>
+
+    <h2><code>create_all()</code> — не система миграций</h2>
+    <table>
+      <thead>
+      <tr>
+        <th><code>Base.metadata.create_all()</code></th>
+        <th>Alembic</th>
+      </tr>
+      </thead>
+      <tbody>
+      <tr>
+        <td>создаёт отсутствующие таблицы</td>
+        <td>хранит последовательность версий схемы</td>
+      </tr>
+      <tr>
+        <td>удобен для первого учебного запуска</td>
+        <td>подходит для управляемых изменений окружений</td>
+      </tr>
+      <tr>
+        <td>не преобразует существующую таблицу под новую модель</td>
+        <td>может добавлять, изменять и откатывать миграции</td>
+      </tr>
+      </tbody>
+    </table>
+    <p>В следующей лекции уберём создание схемы из startup и передадим управление Alembic.</p>
+    <hr>
+
+    <h2>Передаём настройки в приложение</h2>
+    <p><b><code>app/main.py</code></b></p>
+    <pre class="language-python"><code>def create_app(settings: Settings | None = None) -&gt; FastAPI:
+    settings = settings or get_settings()
+
+    application = FastAPI(
+        title=settings.app_name,
+        lifespan=lifespan,
+    )
+    application.state.settings = settings
+
+    application.include_router(
+        auth.router, prefix=settings.api_prefix
+    )
+    application.include_router(
+        products.router, prefix=settings.api_prefix
+    )
+    return application
+</code></pre>
+    <p>Lifespan получает тот же объект <code>Settings</code>, который использовался при сборке приложения. Это особенно важно для тестовой базы.</p>
+    <hr>
+
+    <h2>Dependency с Session</h2>
+    <p><b><code>app/dependencies.py</code></b></p>
+    <pre class="language-python"><code>from collections.abc import Iterator
+from typing import Annotated
+
+from fastapi import Depends, Request
+from sqlalchemy.orm import Session
+
+
+def get_session(request: Request) -&gt; Iterator[Session]:
+    session_factory = request.app.state.session_factory
+    with session_factory() as session:
+        yield session
+
+
+SessionDep = Annotated[Session, Depends(get_session)]
+</code></pre>
+    <p>Код до <code>yield</code> создаёт Session, значение передаётся endpoint, а выход из <code>with</code> гарантированно закрывает её.</p>
+    <hr>
+
+    <h2>Session и соединение — разные вещи</h2>
+    <p>Создание Session не обязательно сразу берёт соединение из пула. Оно понадобится, когда Session впервые выполнит SQL или начнёт сохранять изменения.</p>
+    <pre><code>get_session()
+    ↓
+Session создана
+    ↓ первый SQL
+соединение взято из Engine pool
+    ↓ commit / rollback / close
+соединение возвращено в pool
+</code></pre>
+    <p>Поэтому Engine можно разделять между запросами, а Session — нельзя.</p>
+    <hr>
+
+    <h2>Получаем список товаров</h2>
+    <p><b><code>app/routers/products.py</code></b></p>
+    <pre class="language-python"><code>from sqlalchemy import select
+
+from app.dependencies import SessionDep
+from app.models import Product
+
+
+@router.get("", response_model=list[ProductRead])
+def list_products(session: SessionDep):
+    statement = select(Product).order_by(Product.id)
+    return session.scalars(statement).all()
+</code></pre>
+    <p><code>select(Product)</code> строит объект SQL-выражения. <code>session.scalars()</code> выполняет его и возвращает ORM-объекты без обёртки <code>Row</code>.</p>
+    <hr>
+
+    <h2>Фильтрация и сортировка</h2>
+    <pre class="language-python"><code>statement = (
+    select(Product)
+    .where(Product.category == category)
+    .where(Product.is_available.is_(True))
+    .order_by(Product.price, Product.id)
+)
+products = session.scalars(statement).all()
+</code></pre>
+    <p>SQLAlchemy передаёт значения как связанные параметры. Не собирайте SQL из пользовательских строк через f-string: это создаёт риск SQL injection.</p>
+    <hr>
+
+    <h2>Получаем товар по первичному ключу</h2>
+    <p><b><code>app/dependencies.py</code></b></p>
+    <pre class="language-python"><code>from fastapi import HTTPException, Path, status
+
+from app.models import Product
+
+
+def get_product_or_404(
+    product_id: Annotated[int, Path(ge=1)],
+    session: SessionDep,
+) -&gt; Product:
+    product = session.get(Product, product_id)
+    if product is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Товар не найден",
+        )
+    return product
+
+
+ProductDep = Annotated[Product, Depends(get_product_or_404)]
+</code></pre>
+    <p><code>Session.get()</code> предназначен для поиска по primary key и может использовать identity map текущей Session.</p>
+    <hr>
+
+    <h2>Создаём товар</h2>
+    <p><b><code>app/routers/products.py</code></b></p>
+    <pre class="language-python"><code>@router.post(
+    "",
+    response_model=ProductRead,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_product(
+    product_data: ProductCreate,
+    session: SessionDep,
+    _admin: AdminUserDep,
+):
+    product = Product(
+        **product_data.model_dump(mode="json")
+    )
+    session.add(product)
+    session.commit()
+    session.refresh(product)
+    return product
+</code></pre>
+    <ol>
+      <li>Схема Pydantic проверяет входной JSON.</li>
+      <li>Создаётся новый ORM-объект.</li>
+      <li><code>add()</code> переводит объект в pending-состояние.</li>
+      <li><code>commit()</code> выполняет INSERT и фиксирует транзакцию.</li>
+      <li><code>refresh()</code> повторно читает значения, назначенные базой.</li>
+    </ol>
+    <hr>
+
+    <h2><code>flush</code> и <code>commit</code></h2>
+    <table>
+      <thead>
+      <tr>
+        <th>Операция</th>
+        <th>Что делает</th>
+      </tr>
+      </thead>
+      <tbody>
+      <tr>
+        <td><code>flush()</code></td>
+        <td>отправляет pending-изменения в БД внутри текущей транзакции</td>
+      </tr>
+      <tr>
+        <td><code>commit()</code></td>
+        <td>сначала выполняет flush, затем фиксирует транзакцию</td>
+      </tr>
+      <tr>
+        <td><code>rollback()</code></td>
+        <td>отменяет незакоммиченные изменения текущей транзакции</td>
+      </tr>
+      <tr>
+        <td><code>refresh(obj)</code></td>
+        <td>немедленно перечитывает состояние объекта из БД</td>
+      </tr>
+      </tbody>
+    </table>
+    <p><code>flush()</code> полезен, когда ID нового объекта нужен до финального commit, но сам по себе не делает изменение постоянным.</p>
+    <hr>
+
+    <h2>Обновляем товар</h2>
+    <pre class="language-python"><code>@router.patch(
+    "/{product_id}",
+    response_model=ProductRead,
+)
+def update_product(
+    product: ProductDep,
+    product_data: ProductUpdate,
+    session: SessionDep,
+    _admin: AdminUserDep,
+):
+    current = ProductRead.model_validate(product).model_dump(
+        exclude={"id"}
+    )
+    patch = product_data.model_dump(exclude_unset=True)
+    validated = ProductCreate.model_validate(current | patch)
+
+    for field, value in validated.model_dump(mode="json").items():
+        setattr(product, field, value)
+
+    session.commit()
+    session.refresh(product)
+    return product
+</code></pre>
+    <p>Сохраняем правило из лекции 3: после слияния PATCH повторно валидируем полное состояние, а не только присланные поля.</p>
+    <hr>
+
+    <h2>Удаляем товар</h2>
+    <pre class="language-python"><code>@router.delete(
+    "/{product_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+def delete_product(
+    product: ProductDep,
+    session: SessionDep,
+    _admin: AdminUserDep,
+):
+    session.delete(product)
+    session.commit()
+    return None
+</code></pre>
+    <p><code>delete()</code> только помечает ORM-объект. SQL DELETE отправляется во время flush, который вызывается внутри commit.</p>
+    <hr>
+
+    <h2>Что происходит в запросе записи</h2>
+    <table>
+      <thead>
+      <tr>
+        <th>Шаг</th>
+        <th>Компонент</th>
+      </tr>
+      </thead>
+      <tbody>
+      <tr>
+        <td>1</td>
+        <td>FastAPI валидирует HTTP-вход через Pydantic</td>
+      </tr>
+      <tr>
+        <td>2</td>
+        <td><code>get_session</code> создаёт Session для запроса</td>
+      </tr>
+      <tr>
+        <td>3</td>
+        <td>зависимости проверяют JWT, роль и существование товара</td>
+      </tr>
+      <tr>
+        <td>4</td>
+        <td>endpoint меняет ORM-объект и вызывает commit</td>
+      </tr>
+      <tr>
+        <td>5</td>
+        <td>Pydantic сериализует ORM-объект по <code>ProductRead</code></td>
+      </tr>
+      <tr>
+        <td>6</td>
+        <td>dependency закрывает Session</td>
+      </tr>
+      </tbody>
+    </table>
+    <hr>
+
+    <h2>Ошибки транзакции</h2>
+    <pre class="language-python"><code>from sqlalchemy.exc import IntegrityError
+
+
+try:
+    session.add(product)
+    session.commit()
+except IntegrityError:
+    session.rollback()
+    raise HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail="Конфликт данных",
+    )
+</code></pre>
+    <p>После неудачного flush SQLAlchemy требует явный <code>rollback()</code>, прежде чем Session можно будет использовать снова. Не превращайте любую внутреннюю ошибку в <code>409</code>: ловите только ожидаемые ограничения.</p>
+    <hr>
+
+    <h2>Транзакционная граница</h2>
+    <p>Один endpoint может менять несколько таблиц. Коммитить после каждого маленького действия опасно: получится частично выполненная бизнес-операция.</p>
+    <pre class="language-python"><code>with session.begin():
+    reserve_stock(session, product_id, quantity)
+    create_order(session, user_id, product_id, quantity)
+</code></pre>
+    <p>Если второе действие завершится ошибкой, контекст транзакции откатит и резерв. В простом CRUD мы вызываем commit явно, а составные операции удобно обрамлять <code>session.begin()</code>.</p>
+    <hr>
+
+    <h2>Синхронная или асинхронная SQLAlchemy</h2>
+    <table>
+      <thead>
+      <tr>
+        <th>Синхронный стек</th>
+        <th>Асинхронный стек</th>
+      </tr>
+      </thead>
+      <tbody>
+      <tr>
+        <td><code>create_engine</code>, <code>Session</code></td>
+        <td><code>create_async_engine</code>, <code>AsyncSession</code></td>
+      </tr>
+      <tr>
+        <td><code>psycopg</code> в sync-режиме</td>
+        <td><code>psycopg</code> async или <code>asyncpg</code></td>
+      </tr>
+      <tr>
+        <td>endpoint обычно объявлен через <code>def</code></td>
+        <td>endpoint объявлен через <code>async def</code> и использует <code>await</code></td>
+      </tr>
+      </tbody>
+    </table>
+    <p><code>async def</code> не превращает синхронный драйвер в асинхронный. В этой лекции используем цельный sync-стек; FastAPI выполнит обычный <code>def</code> endpoint в thread pool.</p>
+    <hr>
+
+    <h2>SQLite для обучения, PostgreSQL для сервиса</h2>
+    <table>
+      <thead>
+      <tr>
+        <th>SQLite</th>
+        <th>PostgreSQL</th>
+      </tr>
+      </thead>
+      <tbody>
+      <tr>
+        <td>один файл, нулевая настройка</td>
+        <td>отдельный сервер и полноценная конкурентность</td>
+      </tr>
+      <tr>
+        <td>удобна для локальной практики и тестов</td>
+        <td>типичный выбор для production API</td>
+      </tr>
+      <tr>
+        <td>ограниченная модель параллельной записи</td>
+        <td>роли, схемы, развитые типы и инструменты эксплуатации</td>
+      </tr>
+      </tbody>
+    </table>
+    <p>ORM уменьшает различия, но не стирает их полностью. SQL, типы, блокировки и производительность всё равно зависят от конкретной СУБД.</p>
+    <hr>
+
+    <h2>Что насчёт Django</h2>
+    <p>Django обычно использует собственную встроенную Django ORM, а FastAPI не навязывает слой данных и часто работает с SQLAlchemy.</p>
+    <table>
+      <thead>
+      <tr>
+        <th>FastAPI + SQLAlchemy</th>
+        <th>Django ORM</th>
+      </tr>
+      </thead>
+      <tbody>
+      <tr>
+        <td>Engine и Session настраиваются явно</td>
+        <td>соединения и QuerySet интегрированы во framework</td>
+      </tr>
+      <tr>
+        <td>модели наследуются от <code>DeclarativeBase</code></td>
+        <td>модели наследуются от <code>django.db.models.Model</code></td>
+      </tr>
+      <tr>
+        <td>миграции выполняет Alembic</td>
+        <td>миграции встроены в Django</td>
+      </tr>
+      </tbody>
+    </table>
+    <p>Подключать SQLAlchemy к Django технически можно, но это не стандартный путь. В нашем FastAPI-проекте продолжаем с SQLAlchemy.</p>
+    <hr>
+
+    <h2>Тестовая база из прошлой лекции</h2>
+    <p><b><code>tests/conftest.py</code></b></p>
+    <pre class="language-python"><code>from pathlib import Path
+
+import pytest
+from fastapi import FastAPI
+
+
+@pytest.fixture
+def app(tmp_path: Path) -&gt; FastAPI:
+    database_path = tmp_path / "test.db"
+    settings = Settings(
+        app_name="Products API Test",
+        api_prefix="/api/v1",
+        database_url=f"sqlite+pysqlite:///{database_path.as_posix()}",
+        jwt_secret_key="test-secret-not-for-production",
+    )
+
+    application = create_app(settings)
+    application.dependency_overrides[get_settings] = lambda: settings
+    return application
+</code></pre>
+    <p><code>TestClient</code> из лекции 6 запускает lifespan, поэтому таблицы создадутся до первого запроса и Engine закроется после теста.</p>
+    <hr>
+
+    <h2>Почему не используем общую dev-базу в тестах</h2>
+    <ul>
+      <li>тест может удалить или испортить данные разработчика.</li>
+      <li>результат начнёт зависеть от содержимого файла на конкретной машине.</li>
+      <li>параллельные тесты будут конфликтовать.</li>
+      <li>порядок запуска снова станет значимым.</li>
+    </ul>
+    <p>Изолированная база должна создаваться автоматически и удаляться вместе с временным каталогом pytest.</p>
+    <hr>
+
+    <h2>Что удаляем из старой архитектуры</h2>
+    <pre><code>ProductStorage           → Product ORM model
+StorageDep               → SessionDep
+storage.list()           → session.scalars(select(...))
+storage.get(id)          → session.get(Product, id)
+storage.create(data)     → add + commit + refresh
+storage.delete(id)       → delete + commit
+</code></pre>
+    <hr>
+
+    <h2>Итоговая структура</h2>
+    <pre><code>project/
+├── app/
+│   ├── main.py
+│   ├── lifespan.py
+│   ├── database.py
+│   ├── models.py
+│   ├── schemas.py
+│   ├── storage.py          # пока только UserStorage
+│   ├── security.py
+│   ├── dependencies.py
+│   ├── core/
+│   │   └── config.py
+│   └── routers/
+│       ├── auth.py
+│       └── products.py
+├── tests/
+├── products.db
+├── pyproject.toml
+└── .env
+</code></pre>
+    <p>ORM-модели и Pydantic-схемы лежат отдельно. <code>database.py</code> отвечает за инфраструктуру подключения, а dependency — за срок жизни Session.</p>
+    <hr>
+
+    <h2>Минимальный checklist</h2>
+    <ul>
+      <li>использовать SQLAlchemy 2.0-style: <code>select()</code> и <code>Session.scalars()</code>.</li>
+      <li>не создавать глобальную Session.</li>
+      <li>закрывать Session через dependency с <code>yield</code>.</li>
+      <li>коммитить на границе логической операции.</li>
+      <li>вызывать rollback после ожидаемой ошибки flush.</li>
+      <li>не смешивать ORM-модели с публичными Pydantic-схемами.</li>
+      <li>не использовать <code>create_all()</code> как замену миграциям.</li>
+      <li>запускать тесты на отдельной базе.</li>
+    </ul>
+    <hr>
+
+    <h2>Практика</h2>
+    <p>Задача: заменить in-memory-хранилище товаров реляционной базой данных, сохранив HTTP-контракт Products API.</p>
+    <ol>
+      <li>Установите SQLAlchemy и добавьте <code>DATABASE_URL</code> в <code>Settings</code>.</li>
+      <li>Создайте <code>database.py</code> с фабриками Engine и Session.</li>
+      <li>Создайте <code>models.py</code>, <code>Base</code> и ORM-модель <code>Product</code>.</li>
+      <li>Добавьте <code>from_attributes=True</code> в публичную схему ответа.</li>
+      <li>Создавайте Engine и sessionmaker в lifespan и освобождайте Engine при shutdown.</li>
+      <li>Добавьте <code>SessionDep</code> с одной Session на запрос.</li>
+      <li>Перепишите список, поиск, создание, PATCH и удаление на SQLAlchemy 2.0.</li>
+      <li>Удалите <code>ProductStorage</code> и связанные зависимости.</li>
+      <li>Переведите тесты на отдельный SQLite-файл через <code>tmp_path</code>.</li>
+      <li>Прогоните весь набор тестов из лекции 6.</li>
+    </ol>
+    <p>Дополнительная задача: добавьте фильтры по категории, доступности и диапазону цены, не меняя Session dependency.</p>
+    <hr>
+
+    <h2>Итоги</h2>
+    <p>На этой лекции мы научились:</p>
+    <ul>
+      <li>понимать роли Engine, driver, ORM-модели и Session.</li>
+      <li>описывать типизированные модели в declarative-стиле SQLAlchemy 2.0.</li>
+      <li>разделять таблицы SQLAlchemy и HTTP-схемы Pydantic.</li>
+      <li>управлять Engine через lifespan, а Session — через dependency.</li>
+      <li>выполнять CRUD через <code>select</code>, <code>add</code>, <code>commit</code>, <code>refresh</code> и <code>delete</code>.</li>
+      <li>понимать flush, commit, rollback и транзакционную границу.</li>
+      <li>не смешивать синхронный и асинхронный database stack.</li>
+      <li>изолировать тесты отдельной SQLite-базой.</li>
+    </ul>
+    <p>На следующей лекции подключим Alembic: создадим первую миграцию, научимся обновлять и откатывать схему и перестанем создавать таблицы через <code>create_all()</code>.</p>
+    <hr>
+
+    <h2>Официальные материалы</h2>
+    <ul>
+      <li><a href="https://docs.sqlalchemy.org/en/20/orm/quickstart.html">SQLAlchemy 2.0: ORM Quick Start</a></li>
+      <li><a href="https://docs.sqlalchemy.org/en/20/orm/session_basics.html">SQLAlchemy 2.0: Session Basics</a></li>
+      <li><a href="https://docs.sqlalchemy.org/en/20/orm/session_transaction.html">SQLAlchemy 2.0: Transactions</a></li>
+      <li><a href="https://docs.sqlalchemy.org/en/20/orm/declarative_tables.html">SQLAlchemy 2.0: Declarative Tables</a></li>
+      <li><a href="https://docs.sqlalchemy.org/en/20/tutorial/data_select.html">SQLAlchemy 2.0: Using SELECT Statements</a></li>
+      <li><a href="https://fastapi.tiangolo.com/tutorial/dependencies/dependencies-with-yield/">FastAPI: Dependencies with yield</a></li>
+    </ul>
+    <hr>
+  </db-content>
+  <footer class="site-footer">
+    <div class="footer-logo-link"></div>
+  </footer>
+</div>
+</body>
+</html>

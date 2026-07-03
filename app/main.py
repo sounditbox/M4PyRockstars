@@ -14,6 +14,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         debug=settings.debug,
         lifespan=lifespan,
     )
+    application.state.settings = settings
+
     application.include_router(
         products.router,
         prefix=settings.api_prefix,
