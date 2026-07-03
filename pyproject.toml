@@ -1,0 +1,28 @@
+[project]
+name = "l1"
+version = "0.1.0"
+description = "Add your description here"
+requires-python = ">=3.14"
+dependencies = [
+    "fastapi[standard]>=0.136.3",
+    "pwdlib[argon2]>=0.3.0",
+    "pydantic-settings>=2.14.1",
+    "pyjwt>=2.13.0",
+    "python-multipart>=0.0.32",
+    "uvicorn>=0.49.0",
+]
+
+[dependency-groups]
+dev = [
+    "anyio>=4.13.0",
+    "asgi-lifespan>=2.1.0",
+    "httpx>=0.28.1",
+    "httpx2>=2.5.0",
+    "pytest>=9.1.1",
+    "pytest-cov>=7.1.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+addopts = "-ra"

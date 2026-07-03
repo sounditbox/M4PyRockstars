@@ -1,0 +1,827 @@
+<!doctype html>
+<html lang="ru" class="light">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link href="https://super-dev-styles.github.io/website-assets/styles.css" rel="stylesheet">
+  <link href="https://super-dev-styles.github.io/website-assets/view.css" rel="stylesheet">
+  <link href="https://super-dev-styles.github.io/website-assets/slides.css" rel="stylesheet">
+  <script src="https://super-dev-styles.github.io/website-assets/slides.js" defer></script>
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism.min.css" rel="stylesheet">
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/plugins/line-numbers/prism-line-numbers.min.css" rel="stylesheet">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-core.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/plugins/autoloader/prism-autoloader.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/plugins/line-numbers/prism-line-numbers.min.js"></script>
+  <title>Лекция 3: Pydantic v2 — схемы, вложенные модели и валидаторы</title>
+</head>
+<body>
+<div class="content lecture-content post-content">
+  <db-content>
+    <h1>Лекция 3: Pydantic v2 — схемы, вложенные модели и валидаторы</h1>
+    <p>В первых двух лекциях Pydantic уже проверял тела запросов и формировал ответы. Теперь разберём его как самостоятельный инструмент проектирования контрактов данных.</p>
+    <p>Уточним разницу между обязательным, nullable-полем и значением по умолчанию, научимся переиспользовать ограничения, описывать вложенные структуры, писать валидаторы одного и нескольких полей и безопасно проверять результат частичного обновления.</p>
+    <p>Все примеры используют синтаксис Pydantic v2 и развивают тот же Products API.</p>
+    <hr>
+
+    <h2>Стартовая точка</h2>
+    <p>К началу занятия у нас есть полный CRUD и три схемы: создание, частичное обновление и ответ API.</p>
+    <pre class="language-python"><code>from pydantic import BaseModel, Field
+
+
+class ProductCreate(BaseModel):
+    name: str = Field(min_length=3, max_length=80)
+    category: str = Field(min_length=2, max_length=40)
+    price: float = Field(gt=0)
+    description: str | None = None
+    is_available: bool = True
+
+
+class ProductUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=3, max_length=80)
+    category: str | None = Field(default=None, min_length=2, max_length=40)
+    price: float | None = Field(default=None, gt=0)
+    description: str | None = None
+    is_available: bool | None = None
+
+
+class ProductRead(ProductCreate):
+    id: int
+</code></pre>
+    <p>Эти модели работают, но ограничения повторяются, структура товара пока плоская, а правила между несколькими полями никак не выражены.</p>
+    <hr>
+
+    <h2>Что такое Pydantic</h2>
+    <p><b>Pydantic</b> — библиотека Python для проверки, преобразования и сериализации данных на основе аннотаций типов.</p>
+    <p>Модель Pydantic описывает ожидаемую структуру данных: названия полей, их типы, значения по умолчанию и дополнительные ограничения.</p>
+    <p>В FastAPI Pydantic используется, чтобы:</p>
+    <ul>
+      <li>проверять тела запросов и преобразовывать входные значения.</li>
+      <li>возвращать подробные ошибки валидации.</li>
+      <li>проверять и фильтровать ответы API.</li>
+      <li>создавать JSON Schema для OpenAPI и Swagger UI.</li>
+    </ul>
+    <p>Аннотации типов сами по себе не проверяют данные во время выполнения Python. Эту проверку выполняет Pydantic при создании или валидации модели.</p>
+    <hr>
+
+    <h2>Что делает Pydantic</h2>
+    <table>
+      <thead>
+      <tr>
+        <th>Этап</th>
+        <th>Что происходит</th>
+        <th>Пример</th>
+      </tr>
+      </thead>
+      <tbody>
+      <tr>
+        <td>Parsing</td>
+        <td>чтение входных Python/JSON-данных</td>
+        <td><code>{"price": "99.5"}</code></td>
+      </tr>
+      <tr>
+        <td>Validation</td>
+        <td>проверка типов, ограничений и пользовательских правил</td>
+        <td><code>price &gt; 0</code></td>
+      </tr>
+      <tr>
+        <td>Coercion</td>
+        <td>допустимое преобразование типов</td>
+        <td><code>"99.5"</code> → <code>99.5</code></td>
+      </tr>
+      <tr>
+        <td>Serialization</td>
+        <td>преобразование модели в словарь или JSON</td>
+        <td><code>model_dump()</code></td>
+      </tr>
+      <tr>
+        <td>JSON Schema</td>
+        <td>описание структуры для OpenAPI</td>
+        <td>схемы в <code>/docs</code></td>
+      </tr>
+      </tbody>
+    </table>
+    <p>Аннотация типа описывает ожидаемое значение во время выполнения Pydantic, а не только подсказывает IDE.</p>
+    <hr>
+
+    <h2>Обязательное, nullable и значение по умолчанию</h2>
+    <pre class="language-python"><code>class ProductExample(BaseModel):
+    name: str
+    description: str | None
+    category: str = "other"
+    note: str | None = None
+</code></pre>
+    <table>
+      <thead>
+      <tr>
+        <th>Поле</th>
+        <th>Можно не передавать?</th>
+        <th>Можно передать <code>null</code>?</th>
+      </tr>
+      </thead>
+      <tbody>
+      <tr>
+        <td><code>name: str</code></td>
+        <td>нет</td>
+        <td>нет</td>
+      </tr>
+      <tr>
+        <td><code>description: str | None</code></td>
+        <td>нет</td>
+        <td>да</td>
+      </tr>
+      <tr>
+        <td><code>category: str = "other"</code></td>
+        <td>да</td>
+        <td>нет</td>
+      </tr>
+      <tr>
+        <td><code>note: str | None = None</code></td>
+        <td>да</td>
+        <td>да</td>
+      </tr>
+      </tbody>
+    </table>
+    <p>Ключевое правило: возможность пропустить поле задаёт значение по умолчанию, а <code>| None</code> только разрешает значение <code>null</code>.</p>
+    <hr>
+
+    <h2>Преобразование типов и strict mode</h2>
+    <p>По умолчанию Pydantic работает в мягком режиме и преобразует данные, если это безопасно и предусмотрено таблицей преобразований.</p>
+    <pre class="language-python"><code>class StockInfo(BaseModel):
+    quantity: int
+
+
+stock = StockInfo.model_validate({"quantity": "12"})
+print(stock.quantity)  # 12, тип int
+</code></pre>
+    <p>Если неявное преобразование нежелательно, ограничение можно сделать строгим.</p>
+    <pre class="language-python"><code>class StrictStockInfo(BaseModel):
+    quantity: int = Field(ge=0, strict=True)
+
+
+StrictStockInfo(quantity=12)    # корректно
+StrictStockInfo(quantity="12")  # ValidationError
+</code></pre>
+    <p>Strict mode стоит включать осознанно. Для HTTP path/query-параметров преобразование строк естественно, а для некоторых полей JSON-контракта строгий тип помогает раньше заметить ошибку клиента.</p>
+    <hr>
+
+    <h2><code>Field</code> и переиспользуемые типы</h2>
+    <pre class="language-python"><code>from typing import Annotated
+
+from pydantic import BaseModel, Field
+
+
+ProductName = Annotated[
+    str,
+    Field(min_length=3, max_length=80, examples=["Mechanical Keyboard"]),
+]
+CategoryName = Annotated[
+    str,
+    Field(min_length=2, max_length=40, pattern=r"^[a-z0-9-]+$"),
+]
+PositivePrice = Annotated[float, Field(gt=0, le=1_000_000)]
+
+
+class ProductBase(BaseModel):
+    name: ProductName
+    category: CategoryName
+    price: PositivePrice
+</code></pre>
+    <p><code>Annotated</code> сохраняет основной Python-тип и прикрепляет к нему метаданные Pydantic. Такой тип можно переиспользовать в нескольких моделях без копирования одинаковых ограничений.</p>
+    <hr>
+
+    <h2>Схема зависит от сценария</h2>
+    <pre class="language-python"><code>class ProductBase(BaseModel):
+    name: ProductName
+    category: CategoryName
+    price: PositivePrice
+    description: str | None = Field(default=None, max_length=500)
+    is_available: bool = True
+
+
+class ProductCreate(ProductBase):
+    pass
+
+
+class ProductUpdate(BaseModel):
+    name: ProductName | None = None
+    category: CategoryName | None = None
+    price: PositivePrice | None = None
+    description: str | None = Field(default=None, max_length=500)
+    is_available: bool | None = None
+
+
+class ProductRead(ProductBase):
+    id: int
+</code></pre>
+    <table>
+      <thead>
+      <tr>
+        <th>Схема</th>
+        <th>Назначение</th>
+      </tr>
+      </thead>
+      <tbody>
+      <tr>
+        <td><code>ProductBase</code></td>
+        <td>общие публичные поля и ограничения</td>
+      </tr>
+      <tr>
+        <td><code>ProductCreate</code></td>
+        <td>данные, которые клиент присылает при создании</td>
+      </tr>
+      <tr>
+        <td><code>ProductUpdate</code></td>
+        <td>поля, которые можно частично изменить</td>
+      </tr>
+      <tr>
+        <td><code>ProductRead</code></td>
+        <td>публичный ответ API с серверным ID</td>
+      </tr>
+      </tbody>
+    </table>
+    <p>Наследование полезно, когда смысл полей совпадает. Не нужно строить глубокую иерархию только ради устранения двух повторяющихся строк.</p>
+    <hr>
+
+    <h2>Вложенные модели и коллекции</h2>
+    <pre class="language-python"><code>Tag = Annotated[str, Field(min_length=2, max_length=30)]
+
+
+class ProductSpecs(BaseModel):
+    weight_grams: int = Field(gt=0)
+    color: str | None = Field(default=None, max_length=30)
+    tags: list[Tag] = Field(default_factory=list, max_length=10)
+
+
+class ProductBase(BaseModel):
+    name: ProductName
+    category: CategoryName
+    price: PositivePrice
+    description: str | None = Field(default=None, max_length=500)
+    is_available: bool = True
+    specs: ProductSpecs | None = None
+</code></pre>
+    <pre><code class="language-json">{
+  "name": "Mechanical Keyboard",
+  "category": "electronics",
+  "price": 99.0,
+  "specs": {
+    "weight_grams": 850,
+    "color": "black",
+    "tags": ["wireless", "mechanical"]
+  }
+}</code></pre>
+    <p>Pydantic рекурсивно проверит объект <code>specs</code>, длину списка и каждый элемент <code>tags</code>. <code>default_factory=list</code> явно создаёт новый список для каждого экземпляра модели.</p>
+    <hr>
+
+    <h2><code>ConfigDict</code>: конфигурация модели</h2>
+    <p><code>ConfigDict</code> — типизированный словарь с настройками поведения всей Pydantic-модели. Он задаётся в атрибуте класса <code>model_config</code> и применяется ко всем его полям.</p>
+    <pre class="language-python"><code>from pydantic import BaseModel, ConfigDict
+
+
+class ProductCreate(ProductBase):
+    model_config = ConfigDict(
+        extra="forbid",
+        str_strip_whitespace=True,
+        validate_assignment=True,
+    )
+</code></pre>
+    <p>Настройка наследуется дочерними моделями и при необходимости может быть переопределена. Не нужно включать все параметры сразу: конфигурация должна отражать конкретный контракт модели.</p>
+    <hr>
+
+    <h2>Основные параметры <code>ConfigDict</code></h2>
+    <table>
+      <thead>
+      <tr>
+        <th>Параметр</th>
+        <th>Что меняет</th>
+      </tr>
+      </thead>
+      <tbody>
+      <tr>
+        <td><code>extra</code></td>
+        <td>поведение неизвестных полей: <code>"ignore"</code>, <code>"forbid"</code> или <code>"allow"</code></td>
+      </tr>
+      <tr>
+        <td><code>str_strip_whitespace</code></td>
+        <td>удаляет пробелы в начале и конце всех строковых полей</td>
+      </tr>
+      <tr>
+        <td><code>validate_assignment</code></td>
+        <td>повторно валидирует поле при присваивании после создания модели</td>
+      </tr>
+      <tr>
+        <td><code>strict</code></td>
+        <td>включает строгую проверку типов для всей модели</td>
+      </tr>
+      <tr>
+        <td><code>frozen</code></td>
+        <td>запрещает изменение экземпляра после создания</td>
+      </tr>
+      <tr>
+        <td><code>from_attributes</code></td>
+        <td>позволяет строить схему из атрибутов объекта, например ORM-модели</td>
+      </tr>
+      <tr>
+        <td><code>json_schema_extra</code></td>
+        <td>добавляет примеры и другие данные в JSON Schema/OpenAPI</td>
+      </tr>
+      </tbody>
+    </table>
+    <p>Часть настроек можно задавать точечно через <code>Field</code>. <code>ConfigDict</code> нужен, когда правило относится ко всей модели.</p>
+    <hr>
+
+    <h2><code>extra</code>: что делать с неизвестными полями</h2>
+    <table>
+      <thead>
+      <tr>
+        <th>Значение</th>
+        <th>Поведение</th>
+        <th>Когда подходит</th>
+      </tr>
+      </thead>
+      <tbody>
+      <tr>
+        <td><code>"ignore"</code></td>
+        <td>лишние поля игнорируются; это значение по умолчанию</td>
+        <td>мягкая обратная совместимость</td>
+      </tr>
+      <tr>
+        <td><code>"forbid"</code></td>
+        <td>лишнее поле вызывает ошибку валидации</td>
+        <td>строгие входные контракты API</td>
+      </tr>
+      <tr>
+        <td><code>"allow"</code></td>
+        <td>лишние поля сохраняются в <code>__pydantic_extra__</code></td>
+        <td>динамические структуры, где это действительно ожидается</td>
+      </tr>
+      </tbody>
+    </table>
+    <p>Без <code>extra="forbid"</code> неизвестное поле обычно будет проигнорировано. Это может скрыть опечатку клиента.</p>
+    <pre><code class="language-json">{
+  "name": "Keyboard",
+  "category": "electronics",
+  "price": 99,
+  "is_avaliable": true
+}</code></pre>
+    <p>Здесь клиент ошибся в имени <code>is_available</code>. При <code>extra="forbid"</code> он сразу получит ошибку валидации вместо успешного ответа с проигнорированным значением.</p>
+    <hr>
+
+    <h2><code>field_validator</code>: как он устроен</h2>
+    <p><code>field_validator</code> связывает метод класса с одним или несколькими полями. Метод получает значение, проверяет или преобразует его и обязательно возвращает результат.</p>
+    <pre class="language-python"><code>from pydantic import field_validator
+
+
+class ProductBase(BaseModel):
+    name: ProductName
+    category: CategoryName
+    price: PositivePrice
+
+    @field_validator("name")
+    @classmethod
+    def normalize_name(cls, value: str) -> str:
+        normalized = " ".join(value.split())
+
+        if normalized.lower() in {"test", "product", "товар"}:
+            raise ValueError("Укажите содержательное название товара")
+
+        return normalized
+</code></pre>
+    <p>Здесь валидатор нормализует строку и затем проверяет содержательное правило, которое нельзя выразить только через <code>Field</code>.</p>
+    <hr>
+
+    <h2>Как формируется <code>field_validator</code></h2>
+    <ol>
+      <li><code>@field_validator("name")</code> указывает поле; можно передать несколько имён.</li>
+      <li><code>@classmethod</code> ставится под декоратором Pydantic: первым аргументом метода становится <code>cls</code>.</li>
+      <li><code>value</code> содержит текущее значение. Его тип зависит от выбранного <code>mode</code>.</li>
+      <li>Метод возвращает проверенное или преобразованное значение.</li>
+      <li>При нарушении правила поднимают <code>ValueError</code>; Pydantic добавляет его в общую ошибку валидации.</li>
+    </ol>
+    <p>При необходимости третьим аргументом можно принять <code>ValidationInfo</code>: он даёт имя текущего поля, контекст и уже проверенные поля, объявленные выше.</p>
+    <div class="lesson-note lesson-note--info">
+      <div class="lesson-note__container">
+        <div class="lesson-note__head">Подсказка по <code>mode</code></div>
+        <div class="lesson-note__content">
+          <p><code>after</code> — после стандартной проверки, используется по умолчанию; <code>before</code> — для сырых входных данных; <code>plain</code> — заменяет дальнейшую проверку Pydantic; <code>wrap</code> — оборачивает весь процесс валидации. В большинстве задач выбирайте <code>after</code>.</p>
+        </div>
+      </div>
+    </div>
+    <hr>
+
+    <h2><code>model_validator</code>: правило нескольких полей</h2>
+    <pre class="language-python"><code>from typing import Self
+
+from pydantic import model_validator
+
+
+class ProductCreate(ProductBase):
+    sale_price: PositivePrice | None = None
+
+    @model_validator(mode="after")
+    def check_sale_price(self) -> Self:
+        if self.sale_price is not None and self.sale_price &gt;= self.price:
+            raise ValueError("Цена со скидкой должна быть меньше обычной цены")
+
+        return self
+</code></pre>
+    <p><code>model_validator</code> проверяет данные модели целиком. Он подходит для правил, где одно поле зависит от другого: диапазон дат, совпадение паролей, минимальная и максимальная цена.</p>
+    <p>В примере выбран <code>mode="after"</code>: отдельные поля уже проверены, метод получает созданный экземпляр через <code>self</code> и обязан вернуть его.</p>
+    <div class="lesson-note lesson-note--info">
+      <div class="lesson-note__container">
+        <div class="lesson-note__head">Подсказка по <code>mode</code></div>
+        <div class="lesson-note__content">
+          <p><code>after</code> получает готовую модель и подходит для обычных межполевых правил; <code>before</code> получает сырые данные до создания модели; <code>wrap</code> позволяет управлять запуском внутренней валидации и перехватывать её ошибки.</p>
+        </div>
+      </div>
+    </div>
+    <hr>
+
+    <h2><code>PATCH</code>: проверяем состояние после слияния</h2>
+    <p>В <code>PATCH</code> клиент может прислать только <code>sale_price</code>. Модель запроса не знает текущую обычную цену товара, поэтому межполевое правило нужно проверить после объединения данных.</p>
+    <pre class="language-python"><code>@app.patch(
+    "/products/{product_id}",
+    response_model=ProductRead,
+    tags=["products"],
+)
+def update_product(product_id: int, product_data: ProductUpdate):
+    product = get_product_or_404(product_id)
+
+    update_data = product_data.model_dump(exclude_unset=True)
+    candidate_data = product.model_dump(exclude={"id"}) | update_data
+
+    validated = ProductCreate.model_validate(candidate_data)
+    updated_product = ProductRead(
+        id=product_id,
+        **validated.model_dump(),
+    )
+
+    products_db[product_id] = updated_product
+    return updated_product
+</code></pre>
+    <p><code>ProductUpdate</code> проверяет форму частичного запроса, а <code>ProductCreate.model_validate(...)</code> проверяет полное итоговое состояние ресурса.</p>
+    <hr>
+
+    <h2>Ошибки валидации Pydantic</h2>
+    <p>Pydantic собирает ошибки всех полей и поднимает одно исключение <code>ValidationError</code>. Получить структурированный список можно через метод <code>errors()</code>.</p>
+    <pre class="language-python"><code>from pydantic import ValidationError
+
+
+try:
+    ProductCreate.model_validate(raw_data)
+except ValidationError as error:
+    print(error.error_count())
+    print(error.errors())
+</code></pre>
+    <table>
+      <thead>
+      <tr>
+        <th>Где возникла ошибка</th>
+        <th>Что произойдёт</th>
+      </tr>
+      </thead>
+      <tbody>
+      <tr>
+        <td>ручной вызов <code>model_validate()</code></td>
+        <td>код получает <code>ValidationError</code> и сам решает, как его обработать</td>
+      </tr>
+      <tr>
+        <td>body, query, path или другой вход эндпоинта</td>
+        <td>FastAPI перехватывает ошибку запроса и обычно возвращает <code>422</code></td>
+      </tr>
+      <tr>
+        <td><code>ValueError</code> внутри валидатора</td>
+        <td>Pydantic включает сообщение в общий <code>ValidationError</code></td>
+      </tr>
+      <tr>
+        <td>ответ эндпоинта не соответствует выходной схеме</td>
+        <td>это ошибка серверного кода; клиент не должен получать <code>422</code> за некорректный ответ сервера</td>
+      </tr>
+      </tbody>
+    </table>
+    <p>Не перехватывайте <code>ValidationError</code> без необходимости внутри обычного FastAPI-эндпоинта: стандартный обработчик уже формирует согласованный ответ для клиента.</p>
+    <hr>
+
+    <h2>Как устроена отдельная ошибка</h2>
+    <pre><code class="language-json">{
+  "type": "greater_than",
+  "loc": ["price"],
+  "msg": "Input should be greater than 0",
+  "input": -10,
+  "ctx": {"gt": 0.0}
+}</code></pre>
+    <table>
+      <thead>
+      <tr>
+        <th>Ключ</th>
+        <th>Смысл</th>
+      </tr>
+      </thead>
+      <tbody>
+      <tr>
+        <td><code>loc</code></td>
+        <td>путь до ошибочного поля; FastAPI добавляет источник вроде <code>body</code>, <code>query</code> или <code>path</code></td>
+      </tr>
+      <tr>
+        <td><code>type</code></td>
+        <td>машиночитаемый тип ошибки</td>
+      </tr>
+      <tr>
+        <td><code>msg</code></td>
+        <td>человекочитаемое объяснение</td>
+      </tr>
+      <tr>
+        <td><code>input</code></td>
+        <td>значение, которое не прошло проверку</td>
+      </tr>
+      <tr>
+        <td><code>ctx</code></td>
+        <td>дополнительные параметры правила, если они есть</td>
+      </tr>
+      </tbody>
+    </table>
+    <p>В автотестах надёжнее проверять статус, <code>loc</code> и <code>type</code>, а не целиком сравнивать английский текст <code>msg</code>, который может измениться между версиями.</p>
+    <hr>
+
+    <h2><code>model_validate</code> и <code>model_dump</code></h2>
+    <pre class="language-python"><code>product = ProductCreate.model_validate(raw_data)
+
+python_data = product.model_dump()
+json_ready_data = product.model_dump(mode="json")
+json_string = product.model_dump_json()
+
+changes = product_update.model_dump(exclude_unset=True)
+</code></pre>
+    <table>
+      <thead>
+      <tr>
+        <th>Метод</th>
+        <th>Результат</th>
+      </tr>
+      </thead>
+      <tbody>
+      <tr>
+        <td><code>model_validate(data)</code></td>
+        <td>проверенная модель из словаря или объекта</td>
+      </tr>
+      <tr>
+        <td><code>model_dump()</code></td>
+        <td>словарь с Python-значениями</td>
+      </tr>
+      <tr>
+        <td><code>model_dump(mode="json")</code></td>
+        <td>словарь со значениями, совместимыми с JSON</td>
+      </tr>
+      <tr>
+        <td><code>model_dump_json()</code></td>
+        <td>готовая JSON-строка</td>
+      </tr>
+      </tbody>
+    </table>
+    <p><code>exclude_unset=True</code> уже использовался в лекции 2 для <code>PATCH</code>; теперь мы видим его место в общем API сериализации Pydantic.</p>
+    <hr>
+
+    <h2>Входная, внутренняя и выходная схемы</h2>
+    <p>Один и тот же товар выглядит по-разному в запросе клиента, внутри приложения и в публичном ответе. Разные схемы фиксируют эти разные контракты.</p>
+    <table>
+      <thead>
+      <tr>
+        <th>Схема</th>
+        <th>Определение</th>
+        <th>Зачем отделять</th>
+      </tr>
+      </thead>
+      <tbody>
+      <tr>
+        <td>Входная</td>
+        <td>данные, которые API разрешает принять от клиента</td>
+        <td>клиент не должен назначать серверные и внутренние поля; создание и обновление требуют разных наборов данных</td>
+      </tr>
+      <tr>
+        <td>Внутренняя</td>
+        <td>полное представление данных, с которым работает приложение или хранилище</td>
+        <td>может содержать закупочную цену, служебные статусы, хэши и другие непубличные поля</td>
+      </tr>
+      <tr>
+        <td>Выходная</td>
+        <td>публичный контракт ответа API</td>
+        <td>защищает от утечки внутренних данных и стабилизирует формат для клиента</td>
+      </tr>
+      </tbody>
+    </table>
+    <p>Разделение нужно из-за разных уровней доверия, владельцев полей и требований к видимости. Оно также позволяет менять внутреннее устройство приложения, не ломая публичный контракт API.</p>
+    <hr>
+
+    <h2>Как выходная схема защищает ответ</h2>
+    <pre class="language-python"><code>class ProductRead(ProductBase):
+    id: int
+
+
+class ProductInternal(ProductRead):
+    supplier_code: str
+    purchase_price: PositivePrice
+
+
+@app.get(
+    "/products/{product_id}",
+    response_model=ProductRead,
+    tags=["products"],
+)
+def get_product(product_id: int):
+    return ProductInternal(
+        id=product_id,
+        name="Mechanical Keyboard",
+        category="electronics",
+        price=99,
+        supplier_code="SUP-4815",
+        purchase_price=55,
+    )
+</code></pre>
+    <p><code>response_model</code> проверит, сериализует и отфильтрует ответ. Поля <code>supplier_code</code> и <code>purchase_price</code> не попадут во внешний JSON.</p>
+    <p>Выходная схема — это не просто документация, а граница утечки внутренних данных.</p>
+    <hr>
+
+    <h2>Куда поместить правило валидации</h2>
+    <table>
+      <thead>
+      <tr>
+        <th>Правило</th>
+        <th>Где проверять</th>
+      </tr>
+      </thead>
+      <tbody>
+      <tr>
+        <td>цена положительная</td>
+        <td><code>Field(gt=0)</code></td>
+      </tr>
+      <tr>
+        <td>название не состоит из пробелов</td>
+        <td><code>field_validator</code></td>
+      </tr>
+      <tr>
+        <td>цена со скидкой меньше обычной</td>
+        <td><code>model_validator</code></td>
+      </tr>
+      <tr>
+        <td>товар с таким именем уже существует</td>
+        <td>сервис/эндпоинт после обращения к хранилищу</td>
+      </tr>
+      <tr>
+        <td>категория существует в базе данных</td>
+        <td>сервисный слой, а не Pydantic-модель</td>
+      </tr>
+      </tbody>
+    </table>
+    <p>Pydantic хорошо проверяет самодостаточные данные. Правила, которым нужны база данных, текущий пользователь или внешний сервис, не стоит прятать в валидаторы модели.</p>
+    <hr>
+
+    <h2>Итоговая структура схем Products API</h2>
+    <table>
+      <thead>
+      <tr>
+        <th>Уровень</th>
+        <th>Элементы</th>
+        <th>Роль</th>
+      </tr>
+      </thead>
+      <tbody>
+      <tr>
+        <td>Переиспользуемые типы</td>
+        <td><code>ProductName</code>, <code>CategoryName</code>, <code>PositivePrice</code>, <code>Tag</code></td>
+        <td>общие типы и ограничения полей</td>
+      </tr>
+      <tr>
+        <td>Вложенная схема</td>
+        <td><code>ProductSpecs</code></td>
+        <td>характеристики товара и список тегов</td>
+      </tr>
+      <tr>
+        <td>Общая основа</td>
+        <td><code>ProductBase</code></td>
+        <td>публичные поля, общие ограничения и <code>field_validator</code></td>
+      </tr>
+      <tr>
+        <td>Входные схемы</td>
+        <td><code>ProductCreate</code><br><code>ProductUpdate</code></td>
+        <td>создание полного состояния и частичное обновление через <code>PATCH</code></td>
+      </tr>
+      <tr>
+        <td>Выходная схема</td>
+        <td><code>ProductRead</code></td>
+        <td>наследует <code>ProductBase</code> и добавляет серверный <code>id</code></td>
+      </tr>
+      <tr>
+        <td>Внутренняя схема</td>
+        <td><code>ProductInternal</code></td>
+        <td>расширяет публичную схему служебными полями, скрытыми через <code>response_model</code></td>
+      </tr>
+      </tbody>
+    </table>
+    <p><code>ProductCreate</code>, <code>ProductRead</code> и <code>ProductInternal</code> переиспользуют общую основу. <code>ProductUpdate</code> остаётся отдельной схемой, потому что все разрешённые для изменения поля должны быть необязательными.</p>
+    <hr>
+
+    <h2>Выносим схемы из <code>main.py</code></h2>
+    <p>До этого весь код находился в одном файле: создание приложения, Pydantic-схемы, хранилище и эндпоинты. После появления нескольких схем <code>main.py</code> становится трудно читать.</p>
+    <table>
+      <thead>
+      <tr>
+        <th>До</th>
+        <th>После</th>
+      </tr>
+      </thead>
+      <tbody>
+      <tr>
+        <td><pre><code>project/
+└── main.py
+    ├── app
+    ├── Pydantic-схемы
+    ├── products_db
+    └── эндпоинты</code></pre></td>
+        <td><pre><code>project/
+└── app/
+    ├── __init__.py
+    ├── main.py
+    └── schemas.py</code></pre></td>
+      </tr>
+      </tbody>
+    </table>
+    <p><code>schemas.py</code> содержит типы и Pydantic-модели, а <code>main.py</code> пока оставляет FastAPI-приложение, временное хранилище и эндпоинты.</p>
+    <hr>
+
+    <h2><code>schemas.py</code> и импорты</h2>
+    <p><b><code>app/schemas.py</code></b></p>
+    <pre class="language-python"><code>from typing import Annotated
+
+from pydantic import BaseModel, ConfigDict, Field
+from pydantic import field_validator, model_validator
+
+
+ProductName = Annotated[str, Field(min_length=3, max_length=80)]
+
+
+class ProductBase(BaseModel):
+    ...
+
+
+class ProductCreate(ProductBase):
+    model_config = ConfigDict(extra="forbid")
+    ...
+
+
+class ProductUpdate(BaseModel):
+    ...
+
+
+class ProductRead(ProductBase):
+    id: int
+</code></pre>
+    <p><b><code>app/main.py</code></b></p>
+    <pre class="language-python"><code>from fastapi import FastAPI
+
+from app.schemas import ProductCreate, ProductRead, ProductUpdate
+
+
+app = FastAPI(title="Products API")
+
+# products_db и эндпоинты пока остаются здесь
+</code></pre>
+    <p>Имя <code>schemas.py</code> подчёркивает, что это контракты API. Позже модели SQLAlchemy будут храниться отдельно и не должны смешиваться с Pydantic-схемами.</p>
+    <hr>
+
+    <h2>Практика</h2>
+    <p>Задача: усилить контракты данных существующего Products API и проверить изменения через Swagger UI.</p>
+    <ol>
+      <li>Вынесите повторяющиеся ограничения в типы <code>ProductName</code>, <code>CategoryName</code> и <code>PositivePrice</code> через <code>Annotated</code>.</li>
+      <li>Добавьте вложенную модель <code>ProductSpecs</code> с полями <code>weight_grams</code>, <code>color</code> и <code>tags</code>.</li>
+      <li>Запретите неизвестные поля в <code>ProductCreate</code> через <code>ConfigDict(extra="forbid")</code>.</li>
+      <li>Добавьте <code>field_validator</code>, который убирает повторяющиеся пробелы из названия и запрещает названия <code>test</code>, <code>product</code> и <code>товар</code>.</li>
+      <li>Добавьте поля <code>sale_price</code> и проверку, что цена со скидкой меньше обычной цены.</li>
+      <li>Обновите <code>PATCH</code>: после слияния старых и новых данных повторно провалидируйте полное состояние товара.</li>
+      <li>Перенесите типы и Pydantic-схемы из <code>main.py</code> в <code>app/schemas.py</code> и обновите импорты.</li>
+      <li>Проверьте в Swagger UI: лишнее поле, некорректный вложенный объект, слишком много тегов, запрещённое название и неверную цену со скидкой.</li>
+    </ol>
+    <p>Дополнительная задача: добавьте внутреннюю схему с полем <code>purchase_price</code> и убедитесь, что оно не попадает в ответ с <code>response_model=ProductRead</code>.</p>
+    <hr>
+
+    <h2>Итоги</h2>
+    <p>На этой лекции мы научились:</p>
+    <ul>
+      <li>различать обязательные, nullable-поля и поля со значением по умолчанию.</li>
+      <li>управлять преобразованием типов и использовать strict mode.</li>
+      <li>переиспользовать ограничения через <code>Annotated</code> и <code>Field</code>.</li>
+      <li>разделять схемы создания, частичного обновления, ответа и внутренних данных.</li>
+      <li>описывать вложенные модели и ограниченные коллекции.</li>
+      <li>писать <code>field_validator</code> и <code>model_validator</code>.</li>
+      <li>повторно проверять итоговое состояние после <code>PATCH</code>.</li>
+      <li>обрабатывать <code>ValidationError</code> и читать структуру отдельных ошибок.</li>
+      <li>выносить Pydantic-схемы из <code>main.py</code> в отдельный модуль.</li>
+    </ul>
+    <p>На следующей лекции продолжим модульный рефакторинг: добавим роутеры, зависимости, настройки и жизненный цикл приложения.</p>
+    <hr>
+  </db-content>
+  <footer class="site-footer">
+    <div class="footer-logo-link"></div>
+  </footer>
+</div>
+</body>
+</html>

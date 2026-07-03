@@ -1,0 +1,921 @@
+<!doctype html>
+<html lang="ru" class="light">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link href="https://super-dev-styles.github.io/website-assets/styles.css" rel="stylesheet">
+  <link href="https://super-dev-styles.github.io/website-assets/view.css" rel="stylesheet">
+  <link href="https://super-dev-styles.github.io/website-assets/slides.css" rel="stylesheet">
+  <script src="https://super-dev-styles.github.io/website-assets/slides.js" defer></script>
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism.min.css" rel="stylesheet">
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/plugins/line-numbers/prism-line-numbers.min.css" rel="stylesheet">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-core.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/plugins/autoloader/prism-autoloader.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/plugins/line-numbers/prism-line-numbers.min.js"></script>
+  <title>Лекция 6: Тестирование FastAPI-приложения с pytest</title>
+</head>
+<body>
+<div class="content lecture-content post-content">
+  <db-content>
+    <h1>Лекция 6: Тестирование FastAPI-приложения с pytest</h1>
+    <p>До сих пор мы проверяли API вручную через Swagger UI и <code>curl</code>. Теперь превратим ожидаемое поведение приложения в исполняемые тесты. Они будут запускать FastAPI прямо внутри процесса pytest — без отдельного Uvicorn и без настоящего сетевого порта.</p>
+    <p>В конце лекции у проекта появится компактный набор тестов, который ловит регрессии в HTTP-контракте и не зависит от порядка запуска.</p>
+    <hr>
+
+    <h2>Стартовая точка</h2>
+    <pre><code>project/
+├── app/
+│   ├── main.py
+│   ├── lifespan.py
+│   ├── schemas.py
+│   ├── storage.py
+│   ├── security.py
+│   ├── dependencies.py
+│   ├── core/
+│   │   └── config.py
+│   └── routers/
+│       ├── auth.py
+│       └── products.py
+├── pyproject.toml
+└── .env
+</code></pre>
+    <p>Приложение уже умеет выполнять CRUD для товаров, валидировать данные, выдавать JWT, определять текущего пользователя и разрешать изменение товаров только администратору.</p>
+    <p>В тестовых примерах считаем, что учебные Argon2-хэши из lifespan соответствуют локальным данным <code>admin / admin-pass</code> и <code>user / user-pass</code>. Эти пароли существуют только в тестовом окружении.</p>
+    <hr>
+
+    <h2>Что именно проверяет тест API</h2>
+    <table>
+      <thead>
+      <tr>
+        <th>Часть контракта</th>
+        <th>Пример проверки</th>
+      </tr>
+      </thead>
+      <tbody>
+      <tr>
+        <td>маршрут и HTTP-метод</td>
+        <td><code>GET /api/v1/products</code> существует</td>
+      </tr>
+      <tr>
+        <td>статус</td>
+        <td>создание возвращает <code>201</code>, отсутствие — <code>404</code></td>
+      </tr>
+      <tr>
+        <td>тело ответа</td>
+        <td>JSON соответствует публичной схеме</td>
+      </tr>
+      <tr>
+        <td>заголовки</td>
+        <td>ошибка аутентификации содержит <code>WWW-Authenticate</code></td>
+      </tr>
+      <tr>
+        <td>побочный эффект</td>
+        <td>созданный товар появляется в списке, удалённый исчезает</td>
+      </tr>
+      <tr>
+        <td>правила доступа</td>
+        <td>пользователь получает <code>403</code>, администратор — успех</td>
+      </tr>
+      </tbody>
+    </table>
+    <p>Хороший тест проверяет наблюдаемое поведение. Внутреннее устройство можно менять, пока внешний контракт остаётся прежним.</p>
+    <hr>
+
+    <h2>Уровни тестирования</h2>
+    <table>
+      <thead>
+      <tr>
+        <th>Уровень</th>
+        <th>Что запускаем</th>
+        <th>Что получаем</th>
+      </tr>
+      </thead>
+      <tbody>
+      <tr>
+        <td>unit</td>
+        <td>одну функцию или класс</td>
+        <td>быстрый и точный тест бизнес-правила</td>
+      </tr>
+      <tr>
+        <td>integration</td>
+        <td>несколько компонентов вместе</td>
+        <td>проверку их реального взаимодействия</td>
+      </tr>
+      <tr>
+        <td>API / component</td>
+        <td>FastAPI-приложение через ASGI</td>
+        <td>проверку HTTP-контракта без внешней сети</td>
+      </tr>
+      <tr>
+        <td>end-to-end</td>
+        <td>развёрнутую систему и внешние сервисы</td>
+        <td>максимум реализма, но более медленный и хрупкий тест</td>
+      </tr>
+      </tbody>
+    </table>
+    <p>В этой лекции основной слой — API-тесты. Они охватывают маршрутизацию, Pydantic, зависимости, обработчики ошибок и сериализацию одним запросом.</p>
+    <hr>
+
+    <h2>Устанавливаем тестовые зависимости</h2>
+    <pre class="language-bash"><code>uv add --dev pytest httpx anyio pytest-cov
+</code></pre>
+    <ul>
+      <li><code>pytest</code> находит тесты, выполняет фикстуры и показывает значения в упавших <code>assert</code>.</li>
+      <li><code>httpx</code> предоставляет HTTP-клиент; на нём основан <code>TestClient</code>.</li>
+      <li><code>anyio</code> запускает тесты, объявленные через <code>async def</code>.</li>
+      <li><code>pytest-cov</code> измеряет покрытие кода выполненными тестами.</li>
+    </ul>
+    <p>Зависимости находятся в dev-группе: production-приложению они для запуска не нужны.</p>
+    <hr>
+
+    <h2>Настраиваем pytest</h2>
+    <p><b><code>pyproject.toml</code></b></p>
+    <pre class="language-toml"><code>[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+addopts = "-ra"
+</code></pre>
+    <ul>
+      <li><code>testpaths</code> ограничивает поиск каталогом <code>tests</code>.</li>
+      <li><code>python_files</code> задаёт соглашение об именах файлов.</li>
+      <li><code>-ra</code> добавляет краткую сводку для пропущенных и ожидаемо упавших тестов.</li>
+    </ul>
+    <p>Запускать тесты будем из корня проекта:</p>
+    <pre class="language-bash"><code>uv run pytest
+</code></pre>
+    <hr>
+
+    <h2>Структура тестов</h2>
+    <pre><code>project/
+├── app/
+├── tests/
+│   ├── __init__.py
+│   ├── conftest.py
+│   ├── test_auth.py
+│   ├── test_products.py
+│   └── test_storage.py
+└── pyproject.toml
+</code></pre>
+    <p><code>conftest.py</code> содержит общие фикстуры. Pytest обнаруживает их автоматически — импортировать этот файл в тестовые модули не нужно.</p>
+    <hr>
+
+    <h2>Первый тест с <code>TestClient</code></h2>
+    <p><b><code>tests/test_products.py</code></b></p>
+    <pre class="language-python"><code>from fastapi.testclient import TestClient
+
+from app.main import app
+
+
+def test_list_products():
+    with TestClient(app) as client:
+        response = client.get("/api/v1/products")
+
+    assert response.status_code == 200
+    assert response.json() == []
+</code></pre>
+    <p>Тест — обычная функция с префиксом <code>test_</code>. Хотя FastAPI является ASGI-приложением, запрос через <code>TestClient</code> синхронный: здесь не нужны <code>async def</code> и <code>await</code>.</p>
+    <hr>
+
+    <h2><code>TestClient</code> не поднимает сервер</h2>
+    <pre><code>pytest
+  └── TestClient
+      └── ASGI-вызов
+          └── FastAPI
+              ├── middleware
+              ├── зависимости
+              ├── endpoint
+              └── сериализация ответа
+</code></pre>
+    <p>Запрос проходит через настоящий стек приложения, но остаётся внутри процесса. Это быстрее и стабильнее, чем перед каждым тестом запускать Uvicorn на случайном порту.</p>
+    <hr>
+
+    <h2>Почему клиент используется как контекстный менеджер</h2>
+    <pre class="language-python"><code>with TestClient(app) as client:
+    response = client.get("/api/v1/products")
+</code></pre>
+    <table>
+      <thead>
+      <tr>
+        <th>Момент</th>
+        <th>Что происходит</th>
+      </tr>
+      </thead>
+      <tbody>
+      <tr>
+        <td>вход в <code>with</code></td>
+        <td>выполняется код lifespan до <code>yield</code>, создаются хранилища</td>
+      </tr>
+      <tr>
+        <td>внутри блока</td>
+        <td>тест отправляет запросы готовому приложению</td>
+      </tr>
+      <tr>
+        <td>выход из <code>with</code></td>
+        <td>выполняется код после <code>yield</code>, ресурсы освобождаются</td>
+      </tr>
+      </tbody>
+    </table>
+    <p>Для нашего приложения это обязательно: <code>ProductStorage</code> и <code>UserStorage</code> создаются в lifespan.</p>
+    <hr>
+
+    <h2>Arrange — Act — Assert</h2>
+    <pre class="language-python"><code>def test_unknown_product_returns_404(client):
+    # Arrange
+    product_id = 999
+
+    # Act
+    response = client.get(f"/api/v1/products/{product_id}")
+
+    # Assert
+    assert response.status_code == 404
+    assert response.json() == {"detail": "Товар не найден"}
+</code></pre>
+    <p>Три фазы делают сценарий читаемым: подготовить данные, выполнить действие, проверить результат. Комментарии можно опустить, если границы и так очевидны.</p>
+    <hr>
+
+    <h2>Фикстура приложения</h2>
+    <p><b><code>tests/conftest.py</code></b></p>
+    <pre class="language-python"><code>import pytest
+from fastapi import FastAPI
+
+from app.core.config import Settings
+from app.dependencies import get_settings
+from app.main import create_app
+
+
+@pytest.fixture
+def app() -&gt; FastAPI:
+    settings = Settings(
+        app_name="Products API Test",
+        debug=False,
+        api_prefix="/api/v1",
+        jwt_secret_key="test-secret-not-for-production",
+        jwt_algorithm="HS256",
+        access_token_expire_minutes=5,
+    )
+    application = create_app(settings)
+    application.dependency_overrides[get_settings] = lambda: settings
+    return application
+</code></pre>
+    <p><code>create_app(settings)</code> задаёт конфигурацию при сборке приложения, а override гарантирует, что endpoints получат тот же объект через <code>SettingsDep</code>. Секрет предсказуем только в тестах: production-секрет нельзя копировать в тестовый код, логи или CI-переменные без необходимости.</p>
+    <hr>
+
+    <h2>Фикстура клиента и гарантированный teardown</h2>
+    <p><b><code>tests/conftest.py</code></b></p>
+    <pre class="language-python"><code>from collections.abc import Iterator
+
+from fastapi.testclient import TestClient
+
+
+@pytest.fixture
+def client(app: FastAPI) -&gt; Iterator[TestClient]:
+    with TestClient(app) as test_client:
+        yield test_client
+</code></pre>
+    <p>Код до <code>yield</code> — setup, после него — teardown. Даже если тест упадёт, pytest выйдет из <code>with</code> и корректно завершит lifespan.</p>
+    <p>По умолчанию scope фикстуры — <code>function</code>: новый <code>app</code> и новый <code>client</code> создаются для каждого теста.</p>
+    <hr>
+
+    <h2>Изоляция важнее случайного порядка</h2>
+    <table>
+      <thead>
+      <tr>
+        <th>Хрупкий тест</th>
+        <th>Изолированный тест</th>
+      </tr>
+      </thead>
+      <tbody>
+      <tr>
+        <td>ожидает товар, созданный другим тестом</td>
+        <td>сам создаёт нужные данные</td>
+      </tr>
+      <tr>
+        <td>зависит от номера запуска</td>
+        <td>проходит отдельно и в любом порядке</td>
+      </tr>
+      <tr>
+        <td>использует глобальный изменяемый storage</td>
+        <td>получает свежий экземпляр приложения</td>
+      </tr>
+      </tbody>
+    </table>
+    <p>Практическая проверка: любой тест должен проходить сам по себе через <code>uv run pytest tests/test_products.py::test_name</code>.</p>
+    <hr>
+
+    <h2>Подменяем зависимость, а не весь FastAPI</h2>
+    <p>Для CRUD-тестов нам не обязательно каждый раз проверять криптографию и endpoint входа. Мы можем заменить зависимость, которая возвращает активного пользователя:</p>
+    <p><b><code>tests/conftest.py</code></b></p>
+    <pre class="language-python"><code>from app.dependencies import get_current_active_user
+from app.schemas import UserRead
+
+
+def override_admin_user() -&gt; UserRead:
+    return UserRead(
+        id=100,
+        username="test-admin",
+        role="admin",
+        disabled=False,
+    )
+
+
+@pytest.fixture
+def admin_client(app: FastAPI) -&gt; Iterator[TestClient]:
+    app.dependency_overrides[get_current_active_user] = (
+        override_admin_user
+    )
+
+    try:
+        with TestClient(app) as test_client:
+            yield test_client
+    finally:
+        app.dependency_overrides.clear()
+</code></pre>
+    <p>Ключ в <code>dependency_overrides</code> — исходная вызываемая функция зависимости, значение — её тестовая замена. FastAPI использует override даже для вложенной зависимости внутри проверки роли.</p>
+    <hr>
+
+    <h2>Когда override уместен</h2>
+    <table>
+      <thead>
+      <tr>
+        <th>Подменяем</th>
+        <th>Зачем</th>
+      </tr>
+      </thead>
+      <tbody>
+      <tr>
+        <td>текущего пользователя</td>
+        <td>проверить бизнес-правило отдельно от JWT</td>
+      </tr>
+      <tr>
+        <td>внешний HTTP-клиент</td>
+        <td>не вызывать реальный платный или нестабильный сервис</td>
+      </tr>
+      <tr>
+        <td>репозиторий</td>
+        <td>вернуть контролируемые данные или ошибку</td>
+      </tr>
+      <tr>
+        <td>часы</td>
+        <td>детерминированно проверить срок действия</td>
+      </tr>
+      </tbody>
+    </table>
+    <p>Override не заменяет интеграционные тесты. Для JWT нужны отдельные сценарии, которые проходят через настоящую выдачу и проверку токена.</p>
+    <hr>
+
+    <h2>Тестируем создание товара</h2>
+    <p><b><code>tests/test_products.py</code></b></p>
+    <pre class="language-python"><code>def test_create_product(admin_client):
+    response = admin_client.post(
+        "/api/v1/products",
+        json={
+            "name": "Mechanical Keyboard",
+            "category": "electronics",
+            "price": 129.90,
+        },
+    )
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["id"] == 1
+    assert body["name"] == "Mechanical Keyboard"
+    assert body["category"] == "electronics"
+    assert body["price"] == 129.90
+</code></pre>
+    <p>Параметр <code>json</code> сериализует словарь и добавляет <code>Content-Type: application/json</code>. Pydantic-модель напрямую передавать не нужно.</p>
+    <hr>
+
+    <h2>Проверяем не только ответ, но и состояние</h2>
+    <pre class="language-python"><code>def test_created_product_appears_in_list(admin_client):
+    create_response = admin_client.post(
+        "/api/v1/products",
+        json={
+            "name": "Gaming Mouse",
+            "category": "electronics",
+            "price": 49.90,
+        },
+    )
+    product = create_response.json()
+
+    list_response = admin_client.get("/api/v1/products")
+
+    assert list_response.status_code == 200
+    assert list_response.json() == [product]
+</code></pre>
+    <p>Первый assert подтверждает команду создания, второй запрос — наблюдаемый побочный эффект. Так тест ловит ситуацию, когда API вернул объект, но не сохранил его.</p>
+    <hr>
+
+    <h2>Полный CRUD-сценарий</h2>
+    <pre class="language-python"><code>def test_product_lifecycle(admin_client):
+    created = admin_client.post(
+        "/api/v1/products",
+        json={
+            "name": "Gaming Mouse",
+            "category": "electronics",
+            "price": 49.90,
+        },
+    )
+    product_id = created.json()["id"]
+
+    read = admin_client.get(f"/api/v1/products/{product_id}")
+    assert read.status_code == 200
+
+    updated = admin_client.patch(
+        f"/api/v1/products/{product_id}",
+        json={"is_available": False},
+    )
+    assert updated.status_code == 200
+    assert updated.json()["is_available"] is False
+
+    deleted = admin_client.delete(
+        f"/api/v1/products/{product_id}"
+    )
+    assert deleted.status_code == 204
+    assert deleted.content == b""
+
+    missing = admin_client.get(f"/api/v1/products/{product_id}")
+    assert missing.status_code == 404
+</code></pre>
+    <p>Длинный workflow-тест полезен как один сквозной сценарий. Но точные правила валидации и отдельные ошибки лучше проверять короткими тестами — тогда причина падения видна сразу.</p>
+    <hr>
+
+    <h2>Тестируем ошибку валидации</h2>
+    <pre class="language-python"><code>def test_create_product_rejects_negative_price(admin_client):
+    response = admin_client.post(
+        "/api/v1/products",
+        json={
+            "name": "Gaming Mouse",
+            "category": "electronics",
+            "price": -1,
+        },
+    )
+
+    assert response.status_code == 422
+    errors = response.json()["detail"]
+    assert any(error["loc"][-1] == "price" for error in errors)
+</code></pre>
+    <p>Не стоит копировать весь текст ошибки Pydantic: он может стать подробнее без изменения контракта. Здесь важны статус и привязка ошибки к полю <code>price</code>.</p>
+    <hr>
+
+    <h2>Параметризация граничных случаев</h2>
+    <pre class="language-python"><code>import pytest
+
+
+@pytest.mark.parametrize(
+    ("payload", "field"),
+    [
+        ({"name": "", "category": "electronics", "price": 10}, "name"),
+        ({"name": "Gaming Mouse", "price": 10}, "category"),
+        ({"name": "Gaming Mouse", "category": "electronics", "price": 0}, "price"),
+    ],
+    ids=["empty-name", "missing-category", "zero-price"],
+)
+def test_invalid_product_payload(admin_client, payload, field):
+    response = admin_client.post("/api/v1/products", json=payload)
+
+    assert response.status_code == 422
+    locations = [error["loc"][-1] for error in response.json()["detail"]]
+    assert field in locations
+</code></pre>
+    <p>Pytest создаст три самостоятельных тестовых случая. При падении имя вроде <code>missing-category</code> сразу укажет на проблемный набор данных.</p>
+    <hr>
+
+    <h2>Вход — это form data, не JSON</h2>
+    <p><b><code>tests/test_auth.py</code></b></p>
+    <pre class="language-python"><code>def test_login_returns_bearer_token(client):
+    response = client.post(
+        "/api/v1/auth/token",
+        data={"username": "admin", "password": "admin-pass"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["token_type"] == "bearer"
+    assert isinstance(body["access_token"], str)
+    assert body["access_token"]
+</code></pre>
+    <p><code>OAuth2PasswordRequestForm</code> ожидает <code>application/x-www-form-urlencoded</code>, поэтому используется параметр <code>data</code>. Передача через <code>json</code> должна приводить к ошибке валидации.</p>
+    <hr>
+
+    <h2>Фикстура заголовка авторизации</h2>
+    <p><b><code>tests/conftest.py</code></b></p>
+    <pre class="language-python"><code>@pytest.fixture
+def admin_headers(client: TestClient) -&gt; dict[str, str]:
+    response = client.post(
+        "/api/v1/auth/token",
+        data={"username": "admin", "password": "admin-pass"},
+    )
+    assert response.status_code == 200
+
+    token = response.json()["access_token"]
+    return {"Authorization": f"Bearer {token}"}
+</code></pre>
+    <p>Эта фикстура проходит через настоящие проверку пароля и выпуск JWT. Она подходит для интеграционных auth-сценариев; для узких CRUD-тестов быстрее и яснее <code>dependency_overrides</code>.</p>
+    <hr>
+
+    <h2>Тестируем защищённый endpoint</h2>
+    <pre class="language-python"><code>def test_read_current_user(client, admin_headers):
+    response = client.get(
+        "/api/v1/auth/me",
+        headers=admin_headers,
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "id": 1,
+        "username": "admin",
+        "role": "admin",
+        "disabled": False,
+    }
+</code></pre>
+    <p>В одном сценарии проверяются выдача токена, схема Bearer, подпись JWT, загрузка пользователя и публичная схема ответа.</p>
+    <hr>
+
+    <h2>Неверные учётные данные</h2>
+    <pre class="language-python"><code>@pytest.mark.parametrize(
+    ("username", "password"),
+    [
+        ("missing-user", "any-password"),
+        ("admin", "wrong-password"),
+    ],
+)
+def test_login_rejects_invalid_credentials(
+    client, username, password
+):
+    response = client.post(
+        "/api/v1/auth/token",
+        data={"username": username, "password": password},
+    )
+
+    assert response.status_code == 401
+    assert response.json() == {
+        "detail": "Не удалось проверить учётные данные"
+    }
+    assert response.headers["www-authenticate"] == "Bearer"
+</code></pre>
+    <p>Неизвестный username и неверный пароль дают одинаковый публичный ответ. Тест фиксирует это security-свойство, а не только статус.</p>
+    <hr>
+
+    <h2>Отсутствующий и повреждённый токен</h2>
+    <pre class="language-python"><code>def test_me_requires_token(client):
+    response = client.get("/api/v1/auth/me")
+
+    assert response.status_code == 401
+    assert response.headers["www-authenticate"] == "Bearer"
+
+
+def test_me_rejects_malformed_token(client):
+    response = client.get(
+        "/api/v1/auth/me",
+        headers={"Authorization": "Bearer not-a-jwt"},
+    )
+
+    assert response.status_code == 401
+    assert response.json() == {
+        "detail": "Не удалось проверить учётные данные"
+    }
+</code></pre>
+    <p>Это разные ветви: в первом случае токен не извлечён, во втором — извлечён, но не прошёл декодирование.</p>
+    <hr>
+
+    <h2><code>401</code> и <code>403</code> — разные контракты</h2>
+    <table>
+      <thead>
+      <tr>
+        <th>Ситуация</th>
+        <th>Ожидаемый статус</th>
+      </tr>
+      </thead>
+      <tbody>
+      <tr>
+        <td>токена нет, он повреждён или истёк</td>
+        <td><code>401 Unauthorized</code></td>
+      </tr>
+      <tr>
+        <td>пользователь распознан, но заблокирован</td>
+        <td><code>403 Forbidden</code></td>
+      </tr>
+      <tr>
+        <td>пользователь распознан, но роль не подходит</td>
+        <td><code>403 Forbidden</code></td>
+      </tr>
+      </tbody>
+    </table>
+    <p>Статусы стоит проверять отдельно: ошибка в графе зависимостей легко превращает корректный <code>403</code> в вводящий клиента в заблуждение <code>401</code>.</p>
+    <hr>
+
+    <h2>Тестируем роль настоящим токеном</h2>
+    <pre class="language-python"><code>def test_regular_user_cannot_create_product(client):
+    login = client.post(
+        "/api/v1/auth/token",
+        data={"username": "user", "password": "user-pass"},
+    )
+    token = login.json()["access_token"]
+
+    response = client.post(
+        "/api/v1/products",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "name": "Gaming Mouse",
+            "category": "electronics",
+            "price": 49.90,
+        },
+    )
+
+    assert response.status_code == 403
+    assert response.json() == {"detail": "Недостаточно прав"}
+</code></pre>
+    <p>Этот тест не подменяет пользователя: он проверяет полный путь от формы входа до <code>require_role("admin")</code>.</p>
+    <hr>
+
+    <h2>Unit-тест хранилища</h2>
+    <p><b><code>tests/test_storage.py</code></b></p>
+    <pre class="language-python"><code>from app.schemas import ProductCreate
+from app.storage import ProductStorage
+
+
+def test_storage_assigns_sequential_ids():
+    storage = ProductStorage()
+    data = ProductCreate(
+        name="Gaming Mouse",
+        category="electronics",
+        price=49.90,
+    )
+
+    first = storage.create(data)
+    second = storage.create(data)
+
+    assert first.id == 1
+    assert second.id == 2
+</code></pre>
+    <p>Здесь HTTP-слой не нужен. Если сломалось правило идентификаторов, короткий unit-тест укажет на <code>ProductStorage</code>, а не на весь API.</p>
+    <hr>
+
+    <h2>Когда нужен асинхронный тест</h2>
+    <p><code>TestClient</code> — лучший старт для обычных API-тестов. Асинхронный тест нужен, когда внутри сценария требуется <code>await</code>: например, напрямую проверить данные через асинхронную сессию базы.</p>
+    <pre class="language-bash"><code>uv add --dev asgi-lifespan
+</code></pre>
+    <pre class="language-python"><code>import pytest
+from asgi_lifespan import LifespanManager
+from httpx import ASGITransport, AsyncClient
+
+
+@pytest.mark.anyio
+async def test_list_products_async(app):
+    async with LifespanManager(app) as manager:
+        transport = ASGITransport(app=manager.app)
+        async with AsyncClient(
+            transport=transport,
+            base_url="http://test",
+        ) as client:
+            response = await client.get("/api/v1/products")
+
+    assert response.status_code == 200
+</code></pre>
+    <p><code>ASGITransport</code> сам не запускает lifespan, поэтому он обёрнут в <code>LifespanManager</code>. Делать все тесты асинхронными «на всякий случай» не нужно.</p>
+    <hr>
+
+    <h2>Как тестировать ответ <code>500</code></h2>
+    <p>По умолчанию <code>TestClient</code> пробрасывает необработанное исключение в тест. Это удобно: pytest показывает исходный traceback. Если нужно проверить собственное тело ответа <code>500</code>, отключите это поведение:</p>
+    <pre class="language-python"><code>with TestClient(
+    app,
+    raise_server_exceptions=False,
+) as client:
+    response = client.get("/endpoint-that-fails")
+
+assert response.status_code == 500
+</code></pre>
+    <p>Не используйте этот флаг глобально без причины: иначе полезный traceback превратится в менее информативный HTTP-ответ.</p>
+    <hr>
+
+    <h2>Запуск выбранных тестов</h2>
+    <pre class="language-bash"><code># весь набор
+uv run pytest
+
+# один файл
+uv run pytest tests/test_auth.py
+
+# один тест
+uv run pytest tests/test_auth.py::test_me_requires_token
+
+# тесты, в имени которых есть login
+uv run pytest -k login
+
+# подробные имена случаев
+uv run pytest -v
+</code></pre>
+    <p>Точечный запуск ускоряет локальный цикл, но перед завершением задачи нужно прогнать весь набор.</p>
+    <hr>
+
+    <h2>Покрытие кода</h2>
+    <pre class="language-bash"><code>uv run pytest \
+  --cov=app \
+  --cov-branch \
+  --cov-report=term-missing
+</code></pre>
+    <ul>
+      <li><code>--cov=app</code> измеряет код приложения.</li>
+      <li><code>--cov-branch</code> учитывает не только строки, но и ветви условий.</li>
+      <li><code>term-missing</code> показывает номера непройденных строк.</li>
+    </ul>
+    <p>Высокое покрытие показывает, что код выполнялся, но не доказывает качество проверок. Один тест без содержательных assert может покрыть много строк и почти ничего не гарантировать.</p>
+    <hr>
+
+    <h2>Что делает тест устойчивым</h2>
+    <table>
+      <thead>
+      <tr>
+        <th>Практика</th>
+        <th>Причина</th>
+      </tr>
+      </thead>
+      <tbody>
+      <tr>
+        <td>один главный сценарий на тест</td>
+        <td>из имени и падения понятно, что сломано</td>
+      </tr>
+      <tr>
+        <td>свежие данные для каждого теста</td>
+        <td>нет зависимости от порядка</td>
+      </tr>
+      <tr>
+        <td>явные тестовые настройки</td>
+        <td>результат не зависит от машины разработчика</td>
+      </tr>
+      <tr>
+        <td>проверка публичного контракта</td>
+        <td>рефакторинг реализации не ломает тесты без причины</td>
+      </tr>
+      <tr>
+        <td>минимальная разумная подмена</td>
+        <td>сохраняется ценность интеграции компонентов</td>
+      </tr>
+      <tr>
+        <td>никакой реальной сети</td>
+        <td>набор быстрый и детерминированный</td>
+      </tr>
+      </tbody>
+    </table>
+    <hr>
+
+    <h2>Типичные ошибки</h2>
+    <table>
+      <thead>
+      <tr>
+        <th>Ошибка</th>
+        <th>Как исправить</th>
+      </tr>
+      </thead>
+      <tbody>
+      <tr>
+        <td><code>TestClient(app)</code> создан вне <code>with</code></td>
+        <td>контекстный менеджер запускает lifespan</td>
+      </tr>
+      <tr>
+        <td>логин отправлен через <code>json=</code></td>
+        <td>для OAuth2-формы использовать <code>data=</code></td>
+      </tr>
+      <tr>
+        <td>override остался после теста</td>
+        <td>очищать <code>dependency_overrides</code> в <code>finally</code></td>
+      </tr>
+      <tr>
+        <td>тесты используют один изменяемый storage</td>
+        <td>создавать новое приложение на каждый тест</td>
+      </tr>
+      <tr>
+        <td>проверяется только статус <code>200</code></td>
+        <td>проверять JSON, заголовки и побочный эффект</td>
+      </tr>
+      <tr>
+        <td>точное сравнение нестабильного текста Pydantic</td>
+        <td>проверять статус и расположение ошибочного поля</td>
+      </tr>
+      <tr>
+        <td><code>TestClient</code> вызывается внутри <code>async def</code></td>
+        <td>использовать <code>AsyncClient</code> и <code>ASGITransport</code></td>
+      </tr>
+      </tbody>
+    </table>
+    <hr>
+
+    <h2>Минимальная матрица регрессии</h2>
+    <table>
+      <thead>
+      <tr>
+        <th>Область</th>
+        <th>Позитивный сценарий</th>
+        <th>Негативный сценарий</th>
+      </tr>
+      </thead>
+      <tbody>
+      <tr>
+        <td>чтение товаров</td>
+        <td><code>200</code> и список</td>
+        <td><code>404</code> для неизвестного ID</td>
+      </tr>
+      <tr>
+        <td>создание</td>
+        <td><code>201</code> и сохранённый товар</td>
+        <td><code>422</code> для невалидного тела</td>
+      </tr>
+      <tr>
+        <td>обновление и удаление</td>
+        <td>состояние изменилось</td>
+        <td>неизвестный ресурс не создан случайно</td>
+      </tr>
+      <tr>
+        <td>вход</td>
+        <td>получен Bearer token</td>
+        <td>неверные данные дают одинаковый <code>401</code></td>
+      </tr>
+      <tr>
+        <td>JWT</td>
+        <td><code>/auth/me</code> возвращает пользователя</td>
+        <td>нет токена или токен повреждён</td>
+      </tr>
+      <tr>
+        <td>роли</td>
+        <td>admin изменяет товары</td>
+        <td>user получает <code>403</code></td>
+      </tr>
+      </tbody>
+    </table>
+    <hr>
+
+    <h2>Итоговая структура</h2>
+    <pre><code>project/
+├── app/
+│   ├── main.py
+│   ├── lifespan.py
+│   ├── schemas.py
+│   ├── storage.py
+│   ├── security.py
+│   ├── dependencies.py
+│   ├── core/
+│   │   └── config.py
+│   └── routers/
+│       ├── auth.py
+│       └── products.py
+├── tests/
+│   ├── __init__.py
+│   ├── conftest.py
+│   ├── test_auth.py
+│   ├── test_products.py
+│   └── test_storage.py
+├── pyproject.toml
+├── .env
+└── .env.example
+</code></pre>
+    <hr>
+
+    <h2>Практика</h2>
+    <p>Задача: покрыть тестами Products API и аутентификацию, созданные в предыдущих лекциях.</p>
+    <ol>
+      <li>Добавьте dev-зависимости <code>pytest</code>, <code>httpx</code>, <code>anyio</code> и <code>pytest-cov</code>.</li>
+      <li>Создайте каталог <code>tests</code> и настройте его в <code>pyproject.toml</code>.</li>
+      <li>Добавьте фикстуры нового приложения и <code>TestClient</code> с запуском lifespan.</li>
+      <li>Проверьте пустой список, создание, чтение, частичное обновление и удаление товара.</li>
+      <li>Параметризуйте ошибки валидации полей товара.</li>
+      <li>Через <code>dependency_overrides</code> изолируйте CRUD-тесты от механизма JWT.</li>
+      <li>Отдельно проверьте успешный вход, неверный пароль, неизвестного пользователя, отсутствующий и повреждённый токен.</li>
+      <li>Проверьте <code>403</code> для обычного пользователя и успешное изменение товара администратором.</li>
+      <li>Запустите весь набор и отчёт ветвления через <code>--cov-branch</code>.</li>
+    </ol>
+    <p>Дополнительная задача: сделайте функцию создания access token управляемой временем и добавьте детерминированный тест истёкшего JWT без <code>sleep</code>.</p>
+    <hr>
+
+    <h2>Итоги</h2>
+    <p>На этой лекции мы научились:</p>
+    <ul>
+      <li>различать unit-, integration-, API- и end-to-end-тесты.</li>
+      <li>запускать FastAPI через <code>TestClient</code> без отдельного сервера.</li>
+      <li>гарантированно выполнять lifespan через контекстный менеджер.</li>
+      <li>создавать изолированные фикстуры приложения и клиента.</li>
+      <li>подменять зависимости через <code>app.dependency_overrides</code>.</li>
+      <li>проверять CRUD, валидацию, заголовки и побочные эффекты.</li>
+      <li>тестировать полный JWT-поток и различать <code>401</code> и <code>403</code>.</li>
+      <li>параметризовать граничные случаи и измерять покрытие ветвей.</li>
+      <li>понимать, когда нужен <code>AsyncClient</code>.</li>
+    </ul>
+    <p>На следующей лекции заменим in-memory-хранилище настоящей реляционной базой данных и начнём работать с моделями и CRUD через SQLAlchemy.</p>
+    <hr>
+
+    <h2>Официальные материалы</h2>
+    <ul>
+      <li><a href="https://fastapi.tiangolo.com/tutorial/testing/">FastAPI: Testing</a></li>
+      <li><a href="https://fastapi.tiangolo.com/advanced/testing-dependencies/">FastAPI: Testing Dependencies with Overrides</a></li>
+      <li><a href="https://fastapi.tiangolo.com/advanced/async-tests/">FastAPI: Async Tests</a></li>
+      <li><a href="https://www.starlette.io/lifespan/">Starlette: Lifespan</a></li>
+      <li><a href="https://docs.pytest.org/en/stable/">pytest documentation</a></li>
+      <li><a href="https://www.python-httpx.org/advanced/transports/">HTTPX: Transports</a></li>
+      <li><a href="https://github.com/florimondmanca/asgi-lifespan">asgi-lifespan: LifespanManager</a></li>
+    </ul>
+    <hr>
+  </db-content>
+  <footer class="site-footer">
+    <div class="footer-logo-link"></div>
+  </footer>
+</div>
+</body>
+</html>

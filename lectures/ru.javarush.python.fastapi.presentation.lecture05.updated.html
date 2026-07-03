@@ -1,0 +1,750 @@
+<!doctype html>
+<html lang="ru" class="light">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link href="https://super-dev-styles.github.io/website-assets/styles.css" rel="stylesheet">
+  <link href="https://super-dev-styles.github.io/website-assets/view.css" rel="stylesheet">
+  <link href="https://super-dev-styles.github.io/website-assets/slides.css" rel="stylesheet">
+  <script src="https://super-dev-styles.github.io/website-assets/slides.js" defer></script>
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism.min.css" rel="stylesheet">
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/plugins/line-numbers/prism-line-numbers.min.css" rel="stylesheet">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-core.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/plugins/autoloader/prism-autoloader.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/plugins/line-numbers/prism-line-numbers.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+  <script>mermaid.initialize({ startOnLoad: true });</script>
+  <style>
+.token-visuals {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(220px, 1fr));
+      gap: 24px;
+      align-items: start;
+      margin: 18px 0;
+    }
+
+    .token-visual {
+      text-align: center;
+    }
+
+    .token-visual img {
+      max-width: 100%;
+      max-height: 320px;
+      height: auto;
+      object-fit: contain;
+    }
+
+    .token-visual p {
+      margin-top: 8px;
+      font-weight: 700;
+    }
+
+    .jwt-diagram {
+      margin: 18px 0;
+    }
+  </style>
+  <title>Лекция 5: Аутентификация, OAuth2 и JWT в FastAPI</title>
+</head>
+<body>
+<div class="content lecture-content post-content">
+  <db-content>
+    <h1>Лекция 5: Аутентификация, OAuth2 и JWT в FastAPI</h1>
+<p>Добавим в учебное приложение пользователей, безопасную проверку паролей, выдачу JWT access token и зависимости, которые определяют текущего пользователя и его права.</p>
+    <p>База данных пока остаётся in-memory. Это позволяет сосредоточиться на потоке аутентификации; позже хранилище пользователей заменится SQLAlchemy без переписывания HTTP-контракта.</p>
+    <hr>
+
+    <h2>Стартовая точка</h2>
+<pre><code>app/
+├── main.py
+├── lifespan.py
+├── schemas.py
+├── storage.py
+├── dependencies.py
+├── core/
+│   └── config.py
+└── routers/
+    └── products.py
+</code></pre>
+    <p>Добавим <code>security.py</code> и <code>routers/auth.py</code>. Настройки секрета попадут в <code>core/config.py</code>, а зависимости текущего пользователя — в <code>dependencies.py</code>.</p>
+    <hr>
+
+    <h2>Аутентификация и авторизация</h2>
+<table>
+      <thead>
+      <tr>
+        <th>Понятие</th>
+        <th>Вопрос</th>
+        <th>Пример</th>
+      </tr>
+      </thead>
+      <tbody>
+      <tr>
+        <td>Аутентификация</td>
+        <td>кто выполняет запрос?</td>
+        <td>проверить логин/пароль или access token</td>
+      </tr>
+      <tr>
+        <td>Авторизация</td>
+        <td>что этому пользователю разрешено?</td>
+        <td>только администратор может удалить товар</td>
+      </tr>
+      </tbody>
+    </table>
+    <p>Сначала система устанавливает личность пользователя, затем проверяет его состояние, роль или конкретные разрешения.</p>
+    <p><code>401 Unauthorized</code> означает, что личность не установлена или токен недействителен. <code>403 Forbidden</code> — личность установлена, но действие запрещено.</p>
+    <hr>
+
+    <h2>Поток входа по паролю</h2>
+<ol>
+      <li>Клиент отправляет <code>username</code> и <code>password</code> на <code>POST /api/v1/auth/token</code>.</li>
+      <li>API находит пользователя и сравнивает пароль с сохранённым хэшем.</li>
+      <li>При успехе API подписывает короткоживущий access token.</li>
+      <li>Клиент передаёт токен в заголовке <code>Authorization: Bearer ...</code>.</li>
+      <li>Защищённый эндпоинт проверяет подпись, срок действия и пользователя.</li>
+      <li>Затем выполняется авторизация: проверка активности, роли или разрешения.</li>
+    </ol>
+    <p>Пароль передаётся только при входе. После этого клиент предъявляет access token.</p>
+    <hr>
+
+    <h2>OAuth2, Bearer и JWT — разные вещи</h2>
+<table>
+      <thead>
+      <tr>
+        <th>Термин</th>
+        <th>Что означает</th>
+      </tr>
+      </thead>
+      <tbody>
+      <tr>
+        <td>OAuth2</td>
+        <td>фреймворк авторизации: описывает способы получения и применения access token</td>
+      </tr>
+      <tr>
+        <td>Bearer token</td>
+        <td>токен предъявителя: доступ получает тот, кто может его предъявить</td>
+      </tr>
+      <tr>
+        <td>JWT</td>
+        <td>формат подписанного токена; OAuth2 не требует, чтобы токен был JWT</td>
+      </tr>
+      </tbody>
+    </table>
+    <p>Используем password flow для учебного first-party приложения. Для входа через Google или другого внешнего провайдера обычно применяют Authorization Code с PKCE и OpenID Connect, а не собственную форму пароля.</p>
+    <hr>
+
+    <h2>Access token и refresh token</h2>
+
+<div class="token-visuals">
+      <div class="token-visual">
+        <img data-max-width="512" data-id="0894087f-538b-4e41-9937-6b9519cf56c3" src="https://cdn.javarush.com/images/article/0894087f-538b-4e41-9937-6b9519cf56c3/512.jpeg" alt="Схема использования access token">
+        <p>Access token</p>
+      </div>
+      <div class="token-visual">
+        <img data-max-width="512" data-id="b21cfb0b-b1f4-4175-9e65-c05eda58b0fb" src="https://cdn.javarush.com/images/article/b21cfb0b-b1f4-4175-9e65-c05eda58b0fb/512.jpeg" alt="Схема использования refresh token">
+        <p>Refresh token</p>
+      </div>
+    </div>
+    <table>
+      <thead>
+      <tr>
+        <th>Токен</th>
+        <th>Назначение</th>
+        <th>Обычно</th>
+      </tr>
+      </thead>
+      <tbody>
+      <tr>
+        <td>Access token</td>
+        <td>доступ к защищённым эндпоинтам</td>
+        <td>короткий срок жизни, передаётся часто</td>
+      </tr>
+      <tr>
+        <td>Refresh token</td>
+        <td>получение новой пары токенов без повторного ввода пароля</td>
+        <td>долгий срок, передаётся только auth-сервису</td>
+      </tr>
+      </tbody>
+    </table>
+    <p>Refresh token требует отдельной политики хранения, ротации, отзыва и обнаружения повторного использования. На этой лекции реализуем access token; refresh flow вернётся в углублённой лекции по безопасности.</p>
+<hr>
+
+    <h2>Что такое JWT</h2>
+
+<p><b>JWT</b> — компактный формат передачи JSON-утверждений. Токен состоит из трёх частей:</p>
+    <pre><code>base64url(header).base64url(payload).signature
+</code></pre>
+    <div class="mermaid jwt-diagram">
+graph TD
+  A["JWT token"] --> B["Header"]
+  A --> C["Payload"]
+  A --> D["Signature"]
+  B -- "содержит" --> B1["alg: HS256"]
+  B -- "содержит" --> B2["typ: JWT"]
+  C -- "содержит" --> C1["sub: 42"]
+  C -- "содержит" --> C2["exp: 1782048000"]
+  C -- "содержит" --> C3["type: access"]
+  D -- "создаётся из" --> H["Header + '.' + Payload"]
+  D -- "подписывается" --> S["Секретный ключ"]
+
+  style D fill:#cfc,stroke:#333
+    </div>
+    <table>
+      <thead>
+      <tr>
+        <th>Часть</th>
+        <th>Содержимое</th>
+      </tr>
+      </thead>
+      <tbody>
+      <tr>
+        <td>Header</td>
+        <td>тип токена и алгоритм подписи, например <code>HS256</code></td>
+      </tr>
+      <tr>
+        <td>Payload</td>
+        <td>claims: <code>sub</code>, <code>exp</code> и другие данные</td>
+      </tr>
+      <tr>
+        <td>Signature</td>
+        <td>защищает header и payload от незаметного изменения</td>
+      </tr>
+      </tbody>
+    </table>
+    <p>JWT обычно не зашифрован. Payload может прочитать любой получатель токена, поэтому пароли, секреты и чувствительные данные туда не помещают.</p>
+    <hr>
+
+    <h2>Claims, которые используем</h2>
+<pre><code class="language-json">{
+  "sub": "42",
+  "exp": 1782048000,
+  "iat": 1782046200,
+  "type": "access"
+}</code></pre>
+    <ul>
+      <li><code>sub</code> — строковый идентификатор пользователя.</li>
+      <li><code>exp</code> — момент окончания действия токена.</li>
+      <li><code>iat</code> — момент выпуска токена.</li>
+      <li><code>type</code> — защита от использования другого вида токена как access token.</li>
+    </ul>
+    <p>Роль намеренно не кладём в токен: зависимость загрузит актуального пользователя из хранилища, поэтому блокировка и изменение роли применятся сразу.</p>
+    <hr>
+
+    <h2>Установка зависимостей</h2>
+<pre class="language-bash"><code>uv add pyjwt "pwdlib[argon2]" python-multipart
+</code></pre>
+    <table>
+      <thead>
+      <tr>
+        <th>Пакет</th>
+        <th>Зачем нужен</th>
+      </tr>
+      </thead>
+      <tbody>
+      <tr>
+        <td><code>pyjwt</code></td>
+        <td>создание и проверка JWT</td>
+      </tr>
+      <tr>
+        <td><code>pwdlib[argon2]</code></td>
+        <td>безопасное хэширование паролей алгоритмом Argon2</td>
+      </tr>
+      <tr>
+        <td><code>python-multipart</code></td>
+        <td>чтение form data в <code>OAuth2PasswordRequestForm</code></td>
+      </tr>
+      </tbody>
+    </table>
+    <p>Если проект уже использует полный набор <code>fastapi[standard]</code>, <code>python-multipart</code> может быть установлен, но явная зависимость делает требование auth-модуля заметным.</p>
+    <hr>
+
+    <h2>Секрет JWT</h2>
+<p>Сгенерировать случайный секрет можно командой:</p>
+    <pre class="language-bash"><code>uv run python -c "import secrets; print(secrets.token_hex(32))"
+</code></pre>
+    <p><b><code>.env</code></b></p>
+    <pre class="language-properties"><code>JWT_SECRET_KEY=replace-with-generated-value
+JWT_ALGORITHM=HS256
+ACCESS_TOKEN_EXPIRE_MINUTES=30
+</code></pre>
+    <p>Секрет не коммитится в Git и не записывается прямо в <code>security.py</code>. При утечке его нужно заменить; старые токены после замены перестанут проходить проверку.</p>
+    <hr>
+
+    <h2>Настройки JWT</h2>
+<p><b><code>app/core/config.py</code></b></p>
+    <pre class="language-python"><code>from pydantic import SecretStr
+from pydantic_settings import BaseSettings
+
+
+class Settings(BaseSettings):
+    jwt_secret_key: SecretStr
+    jwt_algorithm: str = "HS256"
+    access_token_expire_minutes: int = 30
+</code></pre>
+    <p><code>SecretStr</code> маскирует значение при обычном выводе модели. Для передачи ключа в PyJWT явно вызывается <code>get_secret_value()</code>.</p>
+    <hr>
+
+    <h2>Схемы пользователя</h2>
+<pre class="language-python"><code>from typing import Literal
+
+from pydantic import BaseModel, Field
+
+
+Role = Literal["user", "admin"]
+
+
+class UserRead(BaseModel):
+    id: int
+    username: str
+    role: Role = "user"
+    disabled: bool = False
+
+
+class UserInDB(UserRead):
+    hashed_password: str
+</code></pre>
+    <p><code>hashed_password</code> существует только во внутренней схеме и не попадёт в ответы API.</p>
+    <hr>
+
+    <h2>Схемы токена</h2>
+<pre class="language-python"><code>class Token(BaseModel):
+    access_token: str
+    token_type: Literal["bearer"] = "bearer"
+
+
+class TokenPayload(BaseModel):
+    sub: str
+    exp: int
+    iat: int
+    type: Literal["access"]
+</code></pre>
+    <p><code>Token</code> — публичный ответ клиенту. <code>TokenPayload</code> — проверенная внутренняя форма claims после декодирования JWT.</p>
+    <hr>
+
+    <h2>Пароль нельзя хранить как текст</h2>
+<table>
+      <thead>
+      <tr>
+        <th>Подход</th>
+        <th>Свойство</th>
+      </tr>
+      </thead>
+      <tbody>
+      <tr>
+        <td>Шифрование</td>
+        <td>данные можно расшифровать ключом — для паролей это не нужно</td>
+      </tr>
+      <tr>
+        <td>Криптографический хэш пароля</td>
+        <td>односторонняя и намеренно дорогая проверка</td>
+      </tr>
+      </tbody>
+    </table>
+    <p>Argon2 сохраняет параметры алгоритма и случайную соль внутри строки хэша. Одинаковые пароли обычно получают разные хэши, но оба успешно проверяются.</p>
+    <p>Хэш защищает пароли при утечке базы, но слабый пароль всё равно можно подобрать. Поэтому нужны ограничения на пароль и защита endpoint входа от перебора.</p>
+    <hr>
+
+    <h2>Хэширование и проверка</h2>
+<p><b><code>app/security.py</code></b></p>
+    <pre class="language-python"><code>from pwdlib import PasswordHash
+
+
+password_hash = PasswordHash.recommended()
+DUMMY_HASH = password_hash.hash("not-a-real-password")
+
+
+def hash_password(password: str) -> str:
+    return password_hash.hash(password)
+
+
+def verify_password(password: str, hash_: str) -> bool:
+    return password_hash.verify(password, hash_)
+</code></pre>
+    <p><code>DUMMY_HASH</code> нужен, чтобы при неизвестном username всё равно выполнить дорогую проверку и уменьшить различие во времени ответа.</p>
+    <hr>
+
+    <h2>Хранилище пользователей</h2>
+<p><b><code>app/storage.py</code></b></p>
+    <pre class="language-python"><code>class UserStorage:
+    def __init__(self) -> None:
+        self.users: dict[int, UserInDB] = {}
+
+    def add(self, user: UserInDB) -> None:
+        self.users[user.id] = user
+
+    def get(self, user_id: int) -> UserInDB | None:
+        return self.users.get(user_id)
+
+    def get_by_username(self, username: str) -> UserInDB | None:
+        for user in self.users.values():
+            if user.username == username:
+                return user
+        return None
+</code></pre>
+    <p>Lifespan создаёт одно <code>UserStorage</code> и добавляет учебного пользователя с заранее сгенерированным Argon2-хэшем. В реальном приложении это будет запрос к базе данных.</p>
+    <hr>
+
+    <h2>Добавляем учебных пользователей в lifespan</h2>
+<p><b><code>app/lifespan.py</code></b></p>
+    <pre class="language-python"><code>async def lifespan(app: FastAPI):
+    users = UserStorage()
+    users.add(
+        UserInDB(
+            id=1,
+            username="admin",
+            role="admin",
+            hashed_password="$argon2id$...",
+        )
+    )
+    app.state.user_storage = users
+
+    yield
+</code></pre>
+    <p>Argon2-хэш один раз генерируется локально и вставляется вместо <code>$argon2id$...</code>. Открытый пароль в приложении не хранится. Декоратор <code>@asynccontextmanager</code> и очистка после <code>yield</code> остаются такими же, как в лекции 4.</p>
+    <hr>
+
+    <h2>Проверяем логин и пароль</h2>
+<pre class="language-python"><code>def authenticate_user(
+    storage: UserStorage,
+    username: str,
+    password: str,
+) -> UserInDB | None:
+    user = storage.get_by_username(username)
+
+    if user is None:
+        verify_password(password, DUMMY_HASH)
+        return None
+
+    if not verify_password(password, user.hashed_password):
+        return None
+
+    return user
+</code></pre>
+    <p>Клиенту возвращается одинаковая ошибка и для неизвестного username, и для неверного пароля. Это не раскрывает, существует ли такой пользователь.</p>
+    <hr>
+
+    <h2>Создаём access token</h2>
+<p><b><code>app/security.py</code></b></p>
+    <pre class="language-python"><code>def create_access_token(subject: str, settings: Settings) -> str:
+    now = datetime.now(timezone.utc)
+    expires_at = now + timedelta(minutes=30)
+    payload = {
+        "sub": subject,
+        "iat": now,
+        "exp": expires_at,
+        "type": "access",
+    }
+    return jwt.encode(
+        payload,
+        settings.jwt_secret_key.get_secret_value(),
+        algorithm=settings.jwt_algorithm,
+    )
+</code></pre>
+    <p>В полном коде число <code>30</code> берётся из <code>settings.access_token_expire_minutes</code>. В <code>sub</code> передаём строковый ID пользователя: <code>str(user.id)</code>.</p>
+    <hr>
+
+    <h2>Проверяем и разбираем токен</h2>
+<pre class="language-python"><code>def decode_access_token(token: str, settings: Settings):
+    payload = jwt.decode(
+        token,
+        settings.jwt_secret_key.get_secret_value(),
+        algorithms=[settings.jwt_algorithm],
+        options={"require": ["sub", "exp", "iat"]},
+    )
+    token_data = TokenPayload.model_validate(payload)
+
+    if token_data.type != "access":
+        raise InvalidTokenError("Unexpected token type")
+
+    return token_data
+</code></pre>
+    <p><code>jwt.decode()</code> проверяет подпись и стандартные временные claims. Затем Pydantic проверяет форму payload.</p>
+    <hr>
+
+    <h2><code>OAuth2PasswordBearer</code></h2>
+<pre class="language-python"><code>from fastapi.security import OAuth2PasswordBearer
+
+
+oauth2_scheme = OAuth2PasswordBearer(
+    tokenUrl="api/v1/auth/token",
+)
+</code></pre>
+    <p><code>OAuth2PasswordBearer</code>:</p>
+    <ul>
+      <li>читает заголовок <code>Authorization: Bearer &lt;token&gt;</code>.</li>
+      <li>возвращает строку токена зависимости.</li>
+      <li>добавляет security scheme и кнопку Authorize в OpenAPI.</li>
+    </ul>
+    <p>Он не проверяет подпись JWT и не загружает пользователя. Эту работу выполняют наши следующие зависимости. <code>tokenUrl</code> должен указывать на реальный endpoint выдачи токена.</p>
+    <hr>
+
+    <h2><code>OAuth2PasswordRequestForm</code></h2>
+<pre class="language-python"><code>LoginForm = Annotated[
+    OAuth2PasswordRequestForm,
+    Depends(),
+]
+</code></pre>
+    <ul>
+      <li>данные передаются как <code>application/x-www-form-urlencoded</code>, не JSON.</li>
+      <li>обязательные имена полей: <code>username</code> и <code>password</code>.</li>
+      <li>форма также поддерживает OAuth2-поля <code>scope</code>, <code>client_id</code> и <code>client_secret</code>.</li>
+    </ul>
+    <p><code>python-multipart</code> нужен FastAPI для разбора формы.</p>
+    <hr>
+
+    <h2>Общая ошибка аутентификации</h2>
+<pre class="language-python"><code>def invalid_credentials() -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Не удалось проверить учётные данные",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+
+
+TokenDep = Annotated[str, Depends(oauth2_scheme)]
+</code></pre>
+    <p>Заголовок <code>WWW-Authenticate: Bearer</code> сообщает клиенту, какая схема аутентификации ожидается.</p>
+    <hr>
+
+    <h2>Endpoint входа</h2>
+<p><b><code>app/routers/auth.py</code></b></p>
+    <pre class="language-python"><code>@router.post("/token", response_model=Token)
+def login(
+    form_data: LoginForm,
+    users: UserStorageDep,
+    settings: SettingsDep,
+) -> Token:
+    user = authenticate_user(
+        users, form_data.username, form_data.password
+    )
+    if user is None:
+        raise invalid_credentials()
+
+    token = create_access_token(str(user.id), settings)
+    return Token(access_token=token)
+</code></pre>
+    <p>Одинаковый ответ используется для неизвестного username и неправильного пароля. Успешный ответ соответствует схеме <code>Token</code>.</p>
+    <hr>
+
+    <h2>Получаем текущего пользователя</h2>
+<p><b><code>app/dependencies.py</code></b></p>
+    <pre class="language-python"><code>def get_current_user(
+    token: TokenDep,
+    users: UserStorageDep,
+    settings: SettingsDep,
+) -> UserRead:
+    try:
+        token_data = decode_access_token(token, settings)
+        user = users.get(int(token_data.sub))
+    except (InvalidTokenError, ValidationError, ValueError):
+        raise invalid_credentials()
+
+    if user is None:
+        raise invalid_credentials()
+
+    return UserRead.model_validate(user.model_dump())
+</code></pre>
+    <p>Даже валидный токен не гарантирует, что пользователь всё ещё существует, поэтому зависимость проверяет хранилище.</p>
+    <hr>
+
+    <h2>Активный пользователь и статусы</h2>
+<pre class="language-python"><code>def get_current_active_user(user: CurrentUserDep) -> UserRead:
+    if user.disabled:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Пользователь заблокирован",
+        )
+    return user
+
+
+ActiveUserDep = Annotated[
+    UserRead, Depends(get_current_active_user)
+]
+</code></pre>
+    <p><code>CurrentUserDep</code> — алиас зависимости <code>get_current_user</code>. Токен здесь уже валиден, но заблокированному пользователю запрещено выполнять операции, поэтому возвращается <code>403</code>.</p>
+    <hr>
+
+    <h2>Endpoint <code>/auth/me</code></h2>
+<pre class="language-python"><code>@router.get("/me", response_model=UserRead)
+def read_current_user(
+    current_user: ActiveUserDep,
+) -> UserRead:
+    return current_user
+</code></pre>
+    <p>Последовательность зависимостей:</p>
+    <pre><code>read_current_user
+└── get_current_active_user
+    └── get_current_user
+        ├── OAuth2PasswordBearer
+        ├── UserStorageDep
+        └── SettingsDep
+</code></pre>
+    <p>В Swagger UI можно получить токен через кнопку Authorize и затем вызвать <code>GET /api/v1/auth/me</code>.</p>
+    <hr>
+
+    <h2>Проверка роли</h2>
+<pre class="language-python"><code>def require_role(role: Role):
+    def dependency(user: ActiveUserDep) -> UserRead:
+        if user.role != role:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Недостаточно прав",
+            )
+        return user
+
+    return dependency
+
+
+AdminUserDep = Annotated[
+    UserRead,
+    Depends(require_role("admin")),
+]
+</code></pre>
+    <p>Если ролей и разрешений станет много, простое сравнение заменится системой permissions или OAuth2 scopes.</p>
+    <hr>
+
+    <h2>Защищаем Products API</h2>
+<pre class="language-python"><code>@router.post(
+    "",
+    response_model=ProductRead,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_product(
+    product_data: ProductCreate,
+    storage: StorageDep,
+    admin: AdminUserDep,
+):
+    return storage.create(product_data)
+</code></pre>
+    <p><code>GET /products</code> остаётся публичным. В <code>POST</code>, <code>PUT</code>, <code>PATCH</code> и <code>DELETE</code> добавляется <code>AdminUserDep</code>.</p>
+    <p>Параметр <code>admin</code> можно назвать <code>_admin</code>, если значение не используется: само разрешение зависимости уже является проверкой.</p>
+    <hr>
+
+    <h2>Подключаем auth-роутер</h2>
+<p><b><code>app/main.py</code></b></p>
+    <pre class="language-python"><code>application = FastAPI(
+    title=settings.app_name,
+    lifespan=lifespan,
+)
+application.include_router(
+    auth.router,
+    prefix=settings.api_prefix,
+)
+application.include_router(
+    products.router,
+    prefix=settings.api_prefix,
+)
+</code></pre>
+    <p>Этот фрагмент находится внутри уже созданной в лекции 4 функции <code>create_app()</code>. Итоговые auth URL: <code>/api/v1/auth/token</code> и <code>/api/v1/auth/me</code>.</p>
+    <hr>
+
+    <h2>Что происходит при защищённом запросе</h2>
+<table>
+      <thead>
+      <tr>
+        <th>Шаг</th>
+        <th>Действие</th>
+      </tr>
+      </thead>
+      <tbody>
+      <tr>
+        <td>1</td>
+        <td><code>OAuth2PasswordBearer</code> извлекает Bearer token</td>
+      </tr>
+      <tr>
+        <td>2</td>
+        <td><code>decode_access_token</code> проверяет подпись, срок и claims</td>
+      </tr>
+      <tr>
+        <td>3</td>
+        <td><code>get_current_user</code> загружает актуального пользователя</td>
+      </tr>
+      <tr>
+        <td>4</td>
+        <td><code>get_current_active_user</code> проверяет блокировку</td>
+      </tr>
+      <tr>
+        <td>5</td>
+        <td><code>require_role</code> проверяет право на операцию</td>
+      </tr>
+      <tr>
+        <td>6</td>
+        <td>эндпоинт выполняется или возвращается <code>401</code>/<code>403</code></td>
+      </tr>
+      </tbody>
+    </table>
+    <hr>
+
+    <h2>Минимальный security checklist</h2>
+<ul>
+      <li>не хранить и не логировать пароли в открытом виде.</li>
+      <li>использовать адаптивный password hash: Argon2, bcrypt или scrypt.</li>
+      <li>хранить JWT secret вне репозитория и регулярно управлять секретами.</li>
+      <li>фиксировать допустимый алгоритм на сервере.</li>
+      <li>не помещать секретные данные в JWT payload.</li>
+      <li>задавать короткий срок действия access token.</li>
+      <li>передавать пароль и токены только через HTTPS.</li>
+      <li>возвращать общую ошибку входа и ограничивать частоту попыток.</li>
+      <li>не считать logout решённым только потому, что клиент удалил JWT.</li>
+    </ul>
+    <p>Учебная in-memory-реализация не решает отзыв access token, refresh rotation, MFA, аудит, rate limiting и управление сессиями.</p>
+    <hr>
+
+    <h2>Итоговая структура</h2>
+<pre><code>app/
+├── main.py
+├── lifespan.py
+├── schemas.py
+├── storage.py
+├── security.py
+├── dependencies.py
+├── core/
+│   └── config.py
+└── routers/
+    ├── auth.py
+    └── products.py
+</code></pre>
+    <ul>
+      <li><code>security.py</code> — пароли, создание и декодирование JWT.</li>
+      <li><code>dependencies.py</code> — текущий пользователь, активность и роли.</li>
+      <li><code>routers/auth.py</code> — выдача токена и профиль пользователя.</li>
+      <li><code>core/config.py</code> — секрет, алгоритм и срок действия.</li>
+    </ul>
+    <hr>
+
+    <h2>Практика</h2>
+<p>Задача: добавить access-token аутентификацию и разграничить доступ к Products API.</p>
+    <ol>
+      <li>Установите <code>pyjwt</code>, <code>pwdlib[argon2]</code> и <code>python-multipart</code> через <code>uv</code>.</li>
+      <li>Добавьте JWT-настройки в <code>Settings</code> и сгенерируйте секрет для локального <code>.env</code>.</li>
+      <li>Создайте схемы <code>UserRead</code>, <code>UserInDB</code>, <code>Token</code> и <code>TokenPayload</code>.</li>
+      <li>Добавьте <code>UserStorage</code> и двух учебных пользователей: <code>user</code> и <code>admin</code> с Argon2-хэшами.</li>
+      <li>Реализуйте <code>authenticate_user</code>, создание и декодирование access token.</li>
+      <li>Создайте <code>POST /api/v1/auth/token</code> и <code>GET /api/v1/auth/me</code>.</li>
+      <li>Добавьте зависимости <code>CurrentUserDep</code>, <code>ActiveUserDep</code> и <code>AdminUserDep</code>.</li>
+      <li>Оставьте чтение товаров публичным, а изменение разрешите только администратору.</li>
+      <li>Проверьте: успешный вход, неверный пароль, отсутствующий токен, испорченный токен, истёкший токен и ответ <code>403</code> для обычного пользователя.</li>
+    </ol>
+    <p>Дополнительная задача: добавьте endpoint, который блокирует пользователя, и проверьте, что уже выданный JWT перестаёт давать доступ из-за повторной загрузки пользователя.</p>
+    <hr>
+
+    <h2>Итоги</h2>
+<p>На этой лекции мы научились:</p>
+    <ul>
+      <li>различать аутентификацию, авторизацию, OAuth2, Bearer token и JWT.</li>
+      <li>хранить пароли в виде Argon2-хэшей и безопасно проверять их.</li>
+      <li>создавать и проверять JWT access token через <code>PyJWT</code>.</li>
+      <li>извлекать токен через <code>OAuth2PasswordBearer</code>.</li>
+      <li>получать текущего пользователя через граф зависимостей.</li>
+      <li>различать ошибки <code>401</code> и <code>403</code>.</li>
+      <li>ограничивать эндпоинты по роли пользователя.</li>
+      <li>понимать границы access token и задачи refresh/session-механизма.</li>
+    </ul>
+    <p>На следующей лекции будем тестировать FastAPI-приложение: CRUD, зависимости, JWT-аутентификацию и ошибочные сценарии через pytest и TestClient.</p>
+    <hr>
+  </db-content>
+  <footer class="site-footer">
+    <div class="footer-logo-link"></div>
+  </footer>
+</div>
+</body>
+</html>

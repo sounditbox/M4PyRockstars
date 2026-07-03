@@ -1,0 +1,550 @@
+<!doctype html>
+<html lang="ru" class="light">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link href="https://super-dev-styles.github.io/website-assets/styles.css" rel="stylesheet">
+  <link href="https://super-dev-styles.github.io/website-assets/view.css" rel="stylesheet">
+  <link href="https://super-dev-styles.github.io/website-assets/slides.css" rel="stylesheet">
+  <script src="https://super-dev-styles.github.io/website-assets/slides.js" defer></script>
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism.min.css" rel="stylesheet"/>
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/plugins/line-numbers/prism-line-numbers.min.css" rel="stylesheet"/>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-core.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/plugins/autoloader/prism-autoloader.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/plugins/line-numbers/prism-line-numbers.min.js"></script>
+  <link href="https://super-dev-styles.github.io/website-assets/styles.css" rel="stylesheet">
+  <link href="https://super-dev-styles.github.io/website-assets/view.css" rel="stylesheet">
+  <title>Лекция 2: REST, полный CRUD и асинхронность в FastAPI</title>
+</head>
+<body>
+<div class="content lecture-content post-content">
+  <db-content>
+    <h1>Лекция 2: REST, полный CRUD и асинхронность в FastAPI</h1>
+    <p>На первой лекции мы собрали минимальный Products API: научились запускать FastAPI-приложение, принимать path/query/body-параметры, описывать данные через Pydantic и проверять API в Swagger UI.</p>
+    <p>Теперь превращаем этот учебный API в более цельный REST-интерфейс: разберем ресурсы, HTTP-методы, статус-коды, полное обновление через <code>PUT</code>, частичное обновление через <code>PATCH</code>, удаление через <code>DELETE</code> и базовую асинхронную модель FastAPI.</p>
+    <p>База данных пока не подключается намеренно. Мы продолжаем использовать in-memory-хранилище, чтобы отделить тему HTTP API от темы SQLAlchemy, миграций и транзакций.</p>
+    <hr>
+
+    <h2>Стартовая точка</h2>
+    <p>Работаем с тем же ресурсом <b>Product</b>. Берем решение практики первой лекции: модели, словарь вместо базы данных, базовые эндпоинты, поле <code>category</code> и фильтры <code>category</code>/<code>only_available</code>.</p>
+    <pre class="language-python"><code>from typing import Annotated
+
+from fastapi import FastAPI, HTTPException, Path, Query, status
+from pydantic import BaseModel, Field
+
+app = FastAPI(title="Products API", version="1.0.0")
+
+
+class ProductCreate(BaseModel):
+    name: str = Field(min_length=3, max_length=80)
+    category: str = Field(min_length=2, max_length=40)
+    price: float = Field(gt=0)
+    description: str | None = None
+    is_available: bool = True
+
+
+class ProductRead(ProductCreate):
+    id: int
+
+
+products_db: dict[int, ProductRead] = {
+    1: ProductRead(id=1, name="Keyboard", category="electronics", price=99.0),
+    2: ProductRead(id=2, name="Mouse", category="electronics", price=49.0),
+}
+next_product_id = 3
+</code></pre>
+    <p>В этой лекции мы не повторяем установку, базовый запуск, простые path/query-параметры и основы Pydantic. Они уже были введены в первой лекции.</p>
+    <hr>
+
+    <h2>REST: ресурс и операция</h2>
+    <p>В REST-подходе API строится вокруг <b>ресурсов</b>. Ресурс — это сущность предметной области, с которой работает клиент: товар, пользователь, заказ, комментарий.</p>
+    <table>
+      <thead>
+      <tr>
+        <th>URL</th>
+        <th>Что означает</th>
+        <th>Пример</th>
+      </tr>
+      </thead>
+      <tbody>
+      <tr>
+        <td><code>/products</code></td>
+        <td>коллекция товаров</td>
+        <td>получить список или создать товар</td>
+      </tr>
+      <tr>
+        <td><code>/products/{product_id}</code></td>
+        <td>конкретный товар</td>
+        <td>получить, заменить, частично обновить или удалить</td>
+      </tr>
+      </tbody>
+    </table>
+    <p>Метод HTTP описывает действие, а URL описывает объект действия. Поэтому лучше <code>GET /products/10</code>, а не <code>GET /getProduct?id=10</code>.</p>
+    <div class="lesson-note lesson-note--info">
+      <div class="lesson-note__container">
+        <div class="lesson-note__head">Правило</div>
+        <div class="lesson-note__content">
+          <p>В URL обычно используют существительные во множественном числе: <code>/products</code>, <code>/users</code>, <code>/orders</code>. Действие уже выражается HTTP-методом.</p>
+        </div>
+      </div>
+    </div>
+    <hr>
+
+    <h2>HTTP-методы в CRUD</h2>
+    <p>CRUD — это базовый набор операций над ресурсом: create, read, update, delete. В HTTP API они обычно выражаются так:</p>
+    <table>
+      <thead>
+      <tr>
+        <th>CRUD</th>
+        <th>HTTP</th>
+        <th>URL</th>
+        <th>Смысл</th>
+      </tr>
+      </thead>
+      <tbody>
+      <tr>
+        <td>Create</td>
+        <td><code>POST</code></td>
+        <td><code>/products</code></td>
+        <td>создать новый товар</td>
+      </tr>
+      <tr>
+        <td>Read list</td>
+        <td><code>GET</code></td>
+        <td><code>/products</code></td>
+        <td>получить список товаров</td>
+      </tr>
+      <tr>
+        <td>Read detail</td>
+        <td><code>GET</code></td>
+        <td><code>/products/{id}</code></td>
+        <td>получить один товар</td>
+      </tr>
+      <tr>
+        <td>Replace</td>
+        <td><code>PUT</code></td>
+        <td><code>/products/{id}</code></td>
+        <td>полностью заменить товар</td>
+      </tr>
+      <tr>
+        <td>Partial update</td>
+        <td><code>PATCH</code></td>
+        <td><code>/products/{id}</code></td>
+        <td>обновить только переданные поля</td>
+      </tr>
+      <tr>
+        <td>Delete</td>
+        <td><code>DELETE</code></td>
+        <td><code>/products/{id}</code></td>
+        <td>удалить товар</td>
+      </tr>
+      </tbody>
+    </table>
+    <p><code>GET</code> должен быть безопасным: он не должен менять данные. <code>PUT</code> и <code>DELETE</code> обычно делают идемпотентными: повтор одинакового запроса приводит к тому же итоговому состоянию ресурса.</p>
+    <hr>
+
+    <h2>Статус-коды</h2>
+    <p>Статус-код — часть контракта API. Клиент должен понимать результат не только по JSON-телу, но и по HTTP-статусу.</p>
+    <table>
+      <thead>
+      <tr>
+        <th>Код</th>
+        <th>Когда использовать</th>
+        <th>Пример</th>
+      </tr>
+      </thead>
+      <tbody>
+      <tr>
+        <td><code>200 OK</code></td>
+        <td>успешное чтение или обновление с телом ответа</td>
+        <td><code>GET</code>, <code>PUT</code>, <code>PATCH</code></td>
+      </tr>
+      <tr>
+        <td><code>201 Created</code></td>
+        <td>ресурс создан</td>
+        <td><code>POST /products</code></td>
+      </tr>
+      <tr>
+        <td><code>204 No Content</code></td>
+        <td>успешно, но тело ответа не возвращается</td>
+        <td><code>DELETE /products/{id}</code></td>
+      </tr>
+      <tr>
+        <td><code>400 Bad Request</code></td>
+        <td>запрос синтаксически валиден, но бизнес-правило нарушено</td>
+        <td>нельзя применить действие к ресурсу</td>
+      </tr>
+      <tr>
+        <td><code>404 Not Found</code></td>
+        <td>ресурс не найден</td>
+        <td>нет товара с таким ID</td>
+      </tr>
+      <tr>
+        <td><code>409 Conflict</code></td>
+        <td>конфликт с текущим состоянием данных</td>
+        <td>товар с таким именем уже существует</td>
+      </tr>
+      <tr>
+        <td><code>422 Unprocessable Entity</code></td>
+        <td>ошибка валидации FastAPI/Pydantic</td>
+        <td>цена меньше или равна нулю</td>
+      </tr>
+      </tbody>
+    </table>
+    <p>Если у эндпоинта статус <code>204</code>, тело ответа возвращать не нужно. Это частая ошибка в учебных API: написать <code>204</code> и одновременно вернуть JSON.</p>
+    <hr>
+
+    <h2>POST: создание товара</h2>
+    <p><code>POST /products</code> создает новый ресурс внутри коллекции. ID назначает сервер.</p>
+    <pre class="language-python"><code>@app.post(
+    "/products",
+    response_model=ProductRead,
+    status_code=status.HTTP_201_CREATED,
+    tags=["products"],
+)
+def create_product(product_data: ProductCreate):
+    global next_product_id
+
+    product = ProductRead(id=next_product_id, **product_data.model_dump())
+    products_db[next_product_id] = product
+    next_product_id += 1
+
+    return product
+</code></pre>
+    <p>Почему <code>201</code>: запрос создал новый ресурс. Почему возвращаем <code>ProductRead</code>: клиенту нужен ID созданного товара и итоговое состояние ресурса.</p>
+    <hr>
+
+    <h2>GET: список и деталка</h2>
+    <p><code>GET /products</code> возвращает коллекцию. Query-параметры не меняют данные, а только уточняют чтение: поиск, фильтр, лимит.</p>
+    <pre class="language-python"><code>@app.get("/products", response_model=list[ProductRead], tags=["products"])
+def list_products(
+    search: Annotated[str | None, Query(min_length=2, max_length=50)] = None,
+    category: Annotated[str | None, Query(min_length=2, max_length=40)] = None,
+    only_available: bool | None = None,
+    limit: Annotated[int, Query(ge=1, le=100)] = 10,
+):
+    products = list(products_db.values())
+
+    if search is not None:
+        products = [
+            product for product in products
+            if search.lower() in product.name.lower()
+        ]
+
+    if category is not None:
+        products = [
+            product for product in products
+            if product.category.lower() == category.lower()
+        ]
+
+    if only_available is not None:
+        products = [
+            product for product in products
+            if product.is_available == only_available
+        ]
+
+    return products[:limit]
+</code></pre>
+    <p>Для чтения одного ресурса используем <code>GET /products/{product_id}</code>. Если ресурса нет, возвращаем <code>404</code>.</p>
+    <pre class="language-python"><code>@app.get("/products/{product_id}", response_model=ProductRead, tags=["products"])
+def get_product(
+    product_id: Annotated[int, Path(ge=1, description="ID товара")]
+):
+    product = products_db.get(product_id)
+    if product is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Товар не найден",
+        )
+    return product
+</code></pre>
+    <hr>
+
+    <h2>PUT: полная замена</h2>
+    <p><code>PUT</code> используется, когда клиент присылает полное новое состояние ресурса. Если поле не пришло, оно не "остается как было", а берется из модели по умолчанию или считается отсутствующим.</p>
+    <pre class="language-python"><code>@app.put("/products/{product_id}", response_model=ProductRead, tags=["products"])
+def replace_product(
+    product_id: Annotated[int, Path(ge=1, description="ID товара")],
+    product_data: ProductCreate,
+):
+    if product_id not in products_db:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Товар не найден",
+        )
+
+    product = ProductRead(id=product_id, **product_data.model_dump())
+    products_db[product_id] = product
+
+    return product
+</code></pre>
+    <p>Пример: если у товара было описание, а клиент отправил <code>PUT</code> без описания, описание станет <code>None</code>. Это ожидаемое поведение полной замены.</p>
+    <hr>
+
+    <h2>PATCH: частичное обновление</h2>
+    <p><code>PATCH</code> используется, когда клиент хочет изменить только часть полей. Для этого нужна отдельная модель, где все поля опциональны.</p>
+    <pre class="language-python"><code>class ProductUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=3, max_length=80)
+    category: str | None = Field(default=None, min_length=2, max_length=40)
+    price: float | None = Field(default=None, gt=0)
+    description: str | None = None
+    is_available: bool | None = None
+</code></pre>
+    <p>Ключевой прием — <code>model_dump(exclude_unset=True)</code>. Он берет только поля, которые клиент реально передал в JSON.</p>
+    <pre class="language-python"><code>@app.patch("/products/{product_id}", response_model=ProductRead, tags=["products"])
+def update_product(
+    product_id: Annotated[int, Path(ge=1, description="ID товара")],
+    product_data: ProductUpdate,
+):
+    product = products_db.get(product_id)
+    if product is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Товар не найден",
+        )
+
+    update_data = product_data.model_dump(exclude_unset=True)
+    updated_product = product.model_copy(update=update_data)
+    products_db[product_id] = updated_product
+
+    return updated_product
+</code></pre>
+    <p>Без <code>exclude_unset=True</code> есть риск перезаписать существующие значения на <code>None</code>, даже если клиент вообще не хотел менять эти поля.</p>
+    <hr>
+
+    <h2>DELETE: удаление</h2>
+    <p><code>DELETE /products/{product_id}</code> удаляет конкретный ресурс. Для успешного удаления часто используют <code>204 No Content</code>.</p>
+    <pre class="language-python"><code>@app.delete(
+    "/products/{product_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    tags=["products"],
+)
+def delete_product(
+    product_id: Annotated[int, Path(ge=1, description="ID товара")]
+):
+    if product_id not in products_db:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Товар не найден",
+        )
+
+    del products_db[product_id]
+    return None
+</code></pre>
+    <p>Если хочется вернуть JSON с удаленным товаром, лучше использовать <code>200 OK</code>, а не <code>204</code>.</p>
+    <hr>
+
+    <h2>Ошибки как часть API-контракта</h2>
+    <p>Ошибки должны быть предсказуемыми. Клиенту важно понимать, что произошло: ресурс не найден, данные не прошли валидацию или действие конфликтует с текущим состоянием.</p>
+    <pre class="language-python"><code>def ensure_unique_product_name(name: str, excluded_id: int | None = None):
+    for product_id, product in products_db.items():
+        if excluded_id is not None and product_id == excluded_id:
+            continue
+        if product.name.lower() == name.lower():
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Товар с таким именем уже существует",
+            )
+</code></pre>
+    <p>Для ошибок валидации тела запроса FastAPI сам вернет <code>422</code>. Например, если <code>price</code> меньше или равен нулю, дополнительный <code>if</code> в эндпоинте не нужен.</p>
+    <hr>
+
+    <h2><code>def</code> или <code>async def</code></h2>
+    <p>В FastAPI можно писать и обычные, и асинхронные path operation functions. Выбор зависит от того, что происходит внутри функции.</p>
+    <p><b>Event loop</b> — это цикл событий, который управляет выполнением асинхронных задач. Когда корутина доходит до <code>await</code>, она добровольно приостанавливается и отдает управление event loop. В это время сервер может продолжить обработку других запросов, а затем вернуться к первой корутине, когда ожидаемая операция завершится.</p>
+    <p>Это полезно для операций ожидания: запрос к БД через async-драйвер, HTTP-запрос через <code>httpx.AsyncClient</code>, обращение к Redis, брокеру сообщений или файловому/сетевому API с async-интерфейсом. Но если внутри <code>async def</code> вызвать блокирующую функцию, event loop не сможет переключиться на другие задачи.</p>
+    <table>
+      <thead>
+      <tr>
+        <th>Шаг</th>
+        <th>Что происходит</th>
+        <th>Кто работает</th>
+      </tr>
+      </thead>
+      <tbody>
+      <tr>
+        <td>1</td>
+        <td>Запрос A попадает в <code>async def</code>-эндпоинт</td>
+        <td>FastAPI запускает корутину</td>
+      </tr>
+      <tr>
+        <td>2</td>
+        <td>Корутина доходит до <code>await db_call()</code></td>
+        <td>Ожидание уходит во внешний ресурс</td>
+      </tr>
+      <tr>
+        <td>3</td>
+        <td>Пока запрос A ждет, event loop может принять запрос B</td>
+        <td>Сервер не простаивает</td>
+      </tr>
+      <tr>
+        <td>4</td>
+        <td>Внешний ресурс возвращает результат для запроса A</td>
+        <td>Event loop продолжает первую корутину</td>
+      </tr>
+      </tbody>
+    </table>
+    <table>
+      <thead>
+      <tr>
+        <th>Внутри эндпоинта</th>
+        <th>Что выбрать</th>
+        <th>Почему</th>
+      </tr>
+      </thead>
+      <tbody>
+      <tr>
+        <td>нет <code>await</code>, обычная синхронная логика</td>
+        <td><code>def</code></td>
+        <td>проще; FastAPI выполнит функцию вне event loop</td>
+      </tr>
+      <tr>
+        <td>есть async-клиент БД, Redis, HTTPX, aio-pika</td>
+        <td><code>async def</code></td>
+        <td>можно использовать <code>await</code> и не блокировать event loop</td>
+      </tr>
+      <tr>
+        <td>CPU-heavy вычисления</td>
+        <td>не держать в эндпоинте</td>
+        <td>лучше вынести в отдельный процесс, очередь или executor</td>
+      </tr>
+      </tbody>
+    </table>
+    <p>Наша in-memory логика синхронная и быстрая, поэтому в примерах достаточно <code>def</code>. Когда появятся асинхронные драйверы БД и внешние API, будем использовать <code>async def</code>.</p>
+    <hr>
+
+    <h2>Цикл событий и <code>asyncio.gather</code></h2>
+    <p><code>await</code> позволяет не блокировать event loop, пока одна операция ждет внешний ресурс. Если внутри одного запроса нужно дождаться нескольких независимых async-операций, их можно запустить вместе через <code>asyncio.gather</code>.</p>
+    <pre class="language-python"><code>import asyncio
+
+
+async def load_price(product_id: int) -> float:
+    await asyncio.sleep(1)
+    return 99.0
+
+
+async def load_stock(product_id: int) -> int:
+    await asyncio.sleep(1)
+    return 12
+
+
+@app.get("/products/{product_id}/summary")
+async def get_product_summary(product_id: int):
+    price, stock = await asyncio.gather(
+        load_price(product_id),
+        load_stock(product_id),
+    )
+
+    return {"product_id": product_id, "price": price, "stock": stock}
+</code></pre>
+    <p>Если ждать эти операции по очереди, запрос будет ждать примерно две секунды. С <code>gather</code> обе операции начинают ожидание сразу, поэтому итоговое время ближе к одной секунде.</p>
+    <table>
+      <thead>
+      <tr>
+        <th>Важно</th>
+        <th>Что это значит</th>
+      </tr>
+      </thead>
+      <tbody>
+      <tr>
+        <td><code>gather</code> не делает CPU-код параллельным</td>
+        <td>Он полезен для независимых операций ожидания: БД, HTTP, Redis, брокеры</td>
+      </tr>
+      <tr>
+        <td>Результаты возвращаются по порядку аргументов</td>
+        <td>Первый результат соответствует первому awaitable, второй — второму</td>
+      </tr>
+      <tr>
+        <td>Блокирующий код все равно блокирует</td>
+        <td><code>requests.get()</code> или <code>time.sleep()</code> внутри <code>async def</code> не становятся async из-за <code>gather</code></td>
+      </tr>
+      </tbody>
+    </table>
+    <hr>
+
+    <h2>Блокирующий код внутри <code>async def</code></h2>
+    <p>Главная ошибка: написать <code>async def</code>, а внутри вызвать блокирующую операцию. Такой код блокирует event loop и мешает другим запросам.</p>
+    <p><b>Плохо:</b></p>
+    <pre class="language-python"><code>import time
+
+
+@app.get("/slow")
+async def slow_endpoint():
+    time.sleep(3)  # блокирует event loop
+    return {"status": "done"}
+</code></pre>
+    <p><b>Лучше для демонстрации ожидания:</b></p>
+    <pre class="language-python"><code>import asyncio
+
+
+@app.get("/slow")
+async def slow_endpoint():
+    await asyncio.sleep(3)
+    return {"status": "done"}
+</code></pre>
+    <p>В реальном коде вместо <code>asyncio.sleep</code> обычно будет <code>await</code> к асинхронному клиенту БД, Redis, HTTP-клиенту или брокеру сообщений.</p>
+    <hr>
+
+    <h2>Финальный Products API</h2>
+    <p>После этой лекции API поддерживает полный CRUD. Основные модели и эндпоинты:</p>
+    <pre class="language-python"><code>class ProductCreate(BaseModel):
+    name: str = Field(min_length=3, max_length=80)
+    category: str = Field(min_length=2, max_length=40)
+    price: float = Field(gt=0)
+    description: str | None = None
+    is_available: bool = True
+
+
+class ProductUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=3, max_length=80)
+    category: str | None = Field(default=None, min_length=2, max_length=40)
+    price: float | None = Field(default=None, gt=0)
+    description: str | None = None
+    is_available: bool | None = None
+
+
+class ProductRead(ProductCreate):
+    id: int
+</code></pre>
+    <pre><code>GET     /products
+GET     /products/{product_id}
+POST    /products
+PUT     /products/{product_id}
+PATCH   /products/{product_id}
+DELETE  /products/{product_id}
+</code></pre>
+    <p>Это еще не production-архитектура. Но это уже правильный HTTP-контракт, к которому потом можно подключить сервисный слой, SQLAlchemy и тесты.</p>
+    <hr>
+
+    <h2>Практика</h2>
+    <p>Задача: взять результат практики первой лекции и доработать Products API до полного CRUD. Фильтры <code>category</code> и <code>only_available</code> уже считаем готовыми.</p>
+    <ol>
+      <li>Добавьте <code>PUT /products/{product_id}</code> для полной замены товара.</li>
+      <li>Добавьте <code>ProductUpdate</code> и <code>PATCH /products/{product_id}</code>.</li>
+      <li>Добавьте <code>DELETE /products/{product_id}</code> со статусом <code>204</code>.</li>
+      <li>Добавьте проверку уникальности имени товара и возвращайте <code>409</code> при конфликте.</li>
+      <li>Проверьте в Swagger UI: успешный POST, ошибка 422, ошибка 404, ошибка 409, успешный PATCH, успешный DELETE.</li>
+    </ol>
+    <p>Если остается время: проверьте разницу между <code>PUT</code> и <code>PATCH</code> на поле <code>description</code>. При <code>PUT</code> отсутствующее поле заменяется значением по умолчанию. При <code>PATCH</code> отсутствующее поле не трогается.</p>
+    <hr>
+
+    <h2>Итоги</h2>
+    <p>На этой лекции мы научились:</p>
+    <ul>
+      <li>проектировать API вокруг ресурсов, а не вокруг глаголов в URL.</li>
+      <li>сопоставлять CRUD-операции с HTTP-методами.</li>
+      <li>выбирать статус-коды для успешных и ошибочных сценариев.</li>
+      <li>различать полную замену через <code>PUT</code> и частичное обновление через <code>PATCH</code>.</li>
+      <li>использовать <code>model_dump(exclude_unset=True)</code> и <code>model_copy(update=...)</code>.</li>
+      <li>понимать базовое правило выбора между <code>def</code> и <code>async def</code>.</li>
+    </ul>
+    <p>На следующей лекции будем углубляться в Pydantic: вложенные модели, валидаторы, схемы для разных сценариев и более аккуратное разделение входных и выходных моделей.</p>
+    <hr>
+  </db-content>
+  <footer class="site-footer">
+    <div class="footer-logo-link">
+    </div>
+  </footer>
+</div>
+</body>
+</html>

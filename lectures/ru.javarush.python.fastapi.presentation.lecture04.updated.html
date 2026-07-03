@@ -1,0 +1,790 @@
+<!doctype html>
+<html lang="ru" class="light">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link href="https://super-dev-styles.github.io/website-assets/styles.css" rel="stylesheet">
+  <link href="https://super-dev-styles.github.io/website-assets/view.css" rel="stylesheet">
+  <link href="https://super-dev-styles.github.io/website-assets/slides.css" rel="stylesheet">
+  <script src="https://super-dev-styles.github.io/website-assets/slides.js" defer></script>
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism.min.css" rel="stylesheet">
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/plugins/line-numbers/prism-line-numbers.min.css" rel="stylesheet">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-core.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/plugins/autoloader/prism-autoloader.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/plugins/line-numbers/prism-line-numbers.min.js"></script>
+  <title>Лекция 4: Структура FastAPI-приложения, APIRouter и зависимости</title>
+</head>
+<body>
+<div class="content lecture-content post-content">
+  <db-content>
+    <h1>Лекция 4: Структура FastAPI-приложения, <code>APIRouter</code> и зависимости</h1>
+    <p>В прошлой лекции мы вынесли Pydantic-схемы из <code>main.py</code>. Теперь продолжим рефакторинг: разделим эндпоинты, хранилище, зависимости и настройки, а также разберём жизненный цикл приложения.</p>
+    <p>Цель занятия — не построить «идеальную архитектуру», а научиться разделять ответственность так, чтобы проект можно было безопасно расширять.</p>
+    <hr>
+
+    <h2>Стартовая точка</h2>
+    <pre><code>project/
+└── app/
+    ├── __init__.py
+    ├── main.py
+    └── schemas.py
+</code></pre>
+    <table>
+      <thead>
+      <tr>
+        <th>Файл</th>
+        <th>Что находится внутри</th>
+      </tr>
+      </thead>
+      <tbody>
+      <tr>
+        <td><code>schemas.py</code></td>
+        <td>Pydantic-типы и схемы <code>ProductCreate</code>, <code>ProductUpdate</code>, <code>ProductRead</code></td>
+      </tr>
+      <tr>
+        <td><code>main.py</code></td>
+        <td>экземпляр FastAPI, in-memory-хранилище, вспомогательные функции и все CRUD-эндпоинты</td>
+      </tr>
+      </tbody>
+    </table>
+    <p>Приложение работает, но <code>main.py</code> всё ещё знает слишком много и будет быстро расти.</p>
+    <hr>
+
+    <h2>Почему одного файла становится мало</h2>
+    <table>
+      <thead>
+      <tr>
+        <th>Проблема</th>
+        <th>Последствие</th>
+      </tr>
+      </thead>
+      <tbody>
+      <tr>
+        <td>эндпоинты разных ресурсов перемешаны</td>
+        <td>сложно найти и изменить нужный сценарий</td>
+      </tr>
+      <tr>
+        <td>хранилище — глобальный словарь рядом с HTTP-кодом</td>
+        <td>логика хранения связана с транспортным слоем</td>
+      </tr>
+      <tr>
+        <td>настройки записаны константами</td>
+        <td>секреты и окружения трудно менять безопасно</td>
+      </tr>
+      <tr>
+        <td>вспомогательные проверки копируются</td>
+        <td>поведение разных эндпоинтов начинает расходиться</td>
+      </tr>
+      <tr>
+        <td>ресурсы создаются в случайных местах</td>
+        <td>непонятно, где их открывать и закрывать</td>
+      </tr>
+      </tbody>
+    </table>
+    <p>Модульность нужна не ради количества файлов, а чтобы у каждой части появилась понятная зона ответственности.</p>
+    <hr>
+
+    <h2>Пакет, модуль и <code>__init__.py</code></h2>
+    <table>
+      <thead>
+      <tr>
+        <th>Понятие</th>
+        <th>Пример</th>
+      </tr>
+      </thead>
+      <tbody>
+      <tr>
+        <td>модуль</td>
+        <td>Python-файл: <code>app/schemas.py</code> → <code>app.schemas</code></td>
+      </tr>
+      <tr>
+        <td>пакет</td>
+        <td>каталог с модулями: <code>app/</code></td>
+      </tr>
+      <tr>
+        <td>подпакет</td>
+        <td><code>app/routers/</code> → <code>app.routers</code></td>
+      </tr>
+      <tr>
+        <td><code>__init__.py</code></td>
+        <td>явно обозначает обычный Python-пакет и делает структуру импортов понятнее</td>
+      </tr>
+      </tbody>
+    </table>
+    <pre class="language-python"><code>from app.schemas import ProductCreate
+from app.routers import products
+</code></pre>
+    <p>В учебном проекте используем абсолютные импорты от пакета <code>app</code>: они легче читаются при переходе между файлами.</p>
+    <hr>
+
+    <h2>Целевая структура проекта</h2>
+    <pre><code>project/
+├── .env
+├── .env.example
+└── app/
+    ├── __init__.py
+    ├── main.py
+    ├── schemas.py
+    ├── storage.py
+    ├── dependencies.py
+    ├── core/
+    │   ├── __init__.py
+    │   └── config.py
+    └── routers/
+        ├── __init__.py
+        └── products.py
+</code></pre>
+    <table>
+      <thead>
+      <tr>
+        <th>Часть</th>
+        <th>Ответственность</th>
+      </tr>
+      </thead>
+      <tbody>
+      <tr>
+        <td><code>main.py</code></td>
+        <td>создание и сборка приложения</td>
+      </tr>
+      <tr>
+        <td><code>routers/</code></td>
+        <td>HTTP-эндпоинты, сгруппированные по ресурсам</td>
+      </tr>
+      <tr>
+        <td><code>dependencies.py</code></td>
+        <td>переиспользуемые зависимости FastAPI</td>
+      </tr>
+      <tr>
+        <td><code>core/config.py</code></td>
+        <td>типизированные настройки приложения</td>
+      </tr>
+      </tbody>
+    </table>
+    <hr>
+
+    <h2>Что такое <code>APIRouter</code></h2>
+    <p><code>APIRouter</code> — объект для группировки связанных path operations. По интерфейсу он похож на уменьшенный <code>FastAPI</code>: поддерживает декораторы <code>get</code>, <code>post</code>, <code>patch</code>, параметры, зависимости, ответы и теги.</p>
+    <pre class="language-python"><code>from fastapi import APIRouter
+
+
+router = APIRouter(
+    prefix="/products",
+    tags=["products"],
+)
+
+
+@router.get("")
+def list_products():
+    ...
+</code></pre>
+    <p>Роутер сам по себе не запускает приложение. Его нужно подключить к экземпляру <code>FastAPI</code>.</p>
+    <hr>
+
+    <h2>Переносим Products API в роутер</h2>
+    <p><b><code>app/routers/products.py</code></b></p>
+    <pre class="language-python"><code>from fastapi import APIRouter, status
+
+from app.schemas import ProductCreate, ProductRead, ProductUpdate
+
+
+router = APIRouter(
+    prefix="/products",
+    tags=["products"],
+)
+
+
+@router.get("", response_model=list[ProductRead])
+def list_products():
+    ...
+
+
+@router.post(
+    "",
+    response_model=ProductRead,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_product(product_data: ProductCreate):
+    ...
+</code></pre>
+    <p>Остальные <code>GET</code>, <code>PUT</code>, <code>PATCH</code> и <code>DELETE</code> переносятся по тому же принципу. URL и модели ответа не должны измениться.</p>
+    <hr>
+
+    <h2>Подключаем роутер к приложению</h2>
+    <p><b><code>app/main.py</code></b></p>
+    <pre class="language-python"><code>from fastapi import FastAPI
+
+from app.routers import products
+
+
+app = FastAPI(title="Products API")
+app.include_router(products.router)
+</code></pre>
+    <p><code>include_router()</code> копирует path operations роутера в основное приложение при запуске. Это не отдельное подприложение и не дополнительный сетевой слой.</p>
+    <pre><code>GET     /products
+POST    /products
+GET     /products/{product_id}
+PUT     /products/{product_id}
+PATCH   /products/{product_id}
+DELETE  /products/{product_id}
+</code></pre>
+    <hr>
+
+    <h2>Где задавать <code>prefix</code>, <code>tags</code> и зависимости</h2>
+    <table>
+      <thead>
+      <tr>
+        <th>Место</th>
+        <th>Когда использовать</th>
+      </tr>
+      </thead>
+      <tbody>
+      <tr>
+        <td><code>APIRouter(...)</code></td>
+        <td>настройка относится ко всем эндпоинтам ресурса</td>
+      </tr>
+      <tr>
+        <td><code>@router.get(...)</code></td>
+        <td>настройка нужна только одной операции</td>
+      </tr>
+      <tr>
+        <td><code>app.include_router(...)</code></td>
+        <td>приложение добавляет общий префикс версии API или переиспользует роутер</td>
+      </tr>
+      </tbody>
+    </table>
+    <pre class="language-python"><code>app.include_router(
+    products.router,
+    prefix="/api/v1",
+)
+</code></pre>
+    <p>Итоговый путь складывается из префиксов: <code>/api/v1</code> + <code>/products</code> + <code>/{product_id}</code>.</p>
+    <hr>
+
+    <h2>Хранилище — отдельная ответственность</h2>
+    <p><b><code>app/storage.py</code></b></p>
+    <pre class="language-python"><code>from app.schemas import ProductRead
+
+
+class ProductStorage:
+    def __init__(self) -> None:
+        self.products: dict[int, ProductRead] = {}
+        self.next_id = 1
+
+    def get(self, product_id: int) -> ProductRead | None:
+        return self.products.get(product_id)
+
+    def list(self) -> list[ProductRead]:
+        return list(self.products.values())
+
+    def delete(self, product_id: int) -> None:
+        del self.products[product_id]
+
+    def clear(self) -> None:
+        self.products.clear()
+        self.next_id = 1
+</code></pre>
+    <p>Это всё ещё in-memory-хранилище, а не production-репозиторий. Но HTTP-код больше не обязан знать, что данные лежат в словаре.</p>
+    <hr>
+
+    <h2>Что такое dependency injection</h2>
+    <p><b>Dependency injection</b> — подход, при котором функция объявляет, что ей нужно, а внешний механизм предоставляет готовое значение.</p>
+    <table>
+      <thead>
+      <tr>
+        <th>Без зависимости</th>
+        <th>С зависимостью</th>
+      </tr>
+      </thead>
+      <tbody>
+      <tr>
+        <td>эндпоинт сам создаёт или ищет объект</td>
+        <td>эндпоинт получает готовый объект параметром</td>
+      </tr>
+      <tr>
+        <td>настройки и ресурсы привязаны к реализации</td>
+        <td>реализацию можно централизованно заменить</td>
+      </tr>
+      <tr>
+        <td>проверки копируются</td>
+        <td>общая проверка выполняется в одном месте</td>
+      </tr>
+      </tbody>
+    </table>
+    <p>В FastAPI механизм DI построен вокруг <code>Depends</code>. Зависимостью может быть обычная или асинхронная функция, вызываемый объект или другая зависимость.</p>
+    <hr>
+
+    <h2><code>Depends</code> и <code>Annotated</code></h2>
+    <pre class="language-python"><code>from typing import Annotated
+
+from fastapi import Depends
+
+
+def get_storage() -> ProductStorage:
+    return ProductStorage()
+
+
+StorageDep = Annotated[
+    ProductStorage,
+    Depends(get_storage),
+]
+
+
+@router.get("")
+def list_products(storage: StorageDep):
+    return storage.list()
+</code></pre>
+    <p><code>ProductStorage</code> описывает тип значения, а <code>Depends(get_storage)</code> сообщает FastAPI, как это значение получить.</p>
+    <div class="lesson-note lesson-note--info">
+      <div class="lesson-note__container">
+        <div class="lesson-note__head">Пока это только форма записи</div>
+        <div class="lesson-note__content">
+          <p>На следующем шаге исправим важную проблему примера: новая <code>ProductStorage()</code> не должна создаваться для каждого запроса.</p>
+        </div>
+      </div>
+    </div>
+    <hr>
+
+    <h2>Зависимость может зависеть от запроса</h2>
+    <p><b><code>app/dependencies.py</code></b></p>
+    <pre class="language-python"><code>from typing import Annotated
+
+from fastapi import Depends, Request
+
+from app.storage import ProductStorage
+
+
+def get_product_storage(request: Request) -> ProductStorage:
+    return request.app.state.product_storage
+
+
+StorageDep = Annotated[
+    ProductStorage,
+    Depends(get_product_storage),
+]
+</code></pre>
+    <p><code>Request</code> FastAPI передаёт автоматически. Через <code>request.app</code> зависимость получает текущее приложение и его ресурсы.</p>
+    <hr>
+
+    <h2>Переиспользуем поиск товара</h2>
+    <p><b><code>app/dependencies.py</code></b></p>
+    <pre class="language-python"><code>from fastapi import HTTPException, Path, status
+
+from app.schemas import ProductRead
+
+
+def get_product_or_404(
+    product_id: Annotated[int, Path(ge=1)],
+    storage: StorageDep,
+) -> ProductRead:
+    product = storage.get(product_id)
+    if product is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Товар не найден",
+        )
+    return product
+
+
+ProductDep = Annotated[
+    ProductRead,
+    Depends(get_product_or_404),
+]
+</code></pre>
+    <p>FastAPI сам передаст <code>product_id</code> из пути и сначала разрешит зависимость <code>StorageDep</code>.</p>
+    <hr>
+
+    <h2>Эндпоинт получает готовый ресурс</h2>
+    <pre class="language-python"><code>@router.get(
+    "/{product_id}",
+    response_model=ProductRead,
+)
+def get_product(product: ProductDep):
+    return product
+
+
+@router.delete(
+    "/{product_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+def delete_product(
+    product: ProductDep,
+    storage: StorageDep,
+):
+    storage.delete(product.id)
+    return None
+</code></pre>
+    <p>Если товара нет, выполнение эндпоинта не начнётся: зависимость сразу вернёт <code>404</code>. Если товар найден, функция работает с готовой моделью.</p>
+    <hr>
+
+    <h2>Граф зависимостей и кэш запроса</h2>
+    <pre><code>delete_product
+├── ProductDep
+│   ├── product_id
+│   └── StorageDep
+└── StorageDep
+</code></pre>
+    <p>FastAPI строит граф, разрешает зависимости в нужном порядке и по умолчанию вызывает одинаковую зависимость только один раз за запрос.</p>
+    <table>
+      <thead>
+      <tr>
+        <th>Настройка</th>
+        <th>Поведение</th>
+      </tr>
+      </thead>
+      <tbody>
+      <tr>
+        <td><code>Depends(get_storage)</code></td>
+        <td>результат переиспользуется внутри текущего запроса</td>
+      </tr>
+      <tr>
+        <td><code>Depends(get_storage, use_cache=False)</code></td>
+        <td>зависимость вызывается повторно при каждом использовании</td>
+      </tr>
+      </tbody>
+    </table>
+    <p>Кэш зависимости живёт только во время одного запроса. Это не замена Redis, <code>lru_cache</code> или кэшу приложения.</p>
+    <hr>
+
+    <h2>Где можно подключать зависимости</h2>
+    <table>
+      <thead>
+      <tr>
+        <th>Уровень</th>
+        <th>Пример</th>
+        <th>Когда подходит</th>
+      </tr>
+      </thead>
+      <tbody>
+      <tr>
+        <td>параметр функции</td>
+        <td><code>storage: StorageDep</code></td>
+        <td>эндпоинту нужен результат зависимости</td>
+      </tr>
+      <tr>
+        <td>декоратор операции</td>
+        <td><code>@router.post(..., dependencies=[Depends(check)])</code></td>
+        <td>проверку нужно выполнить, но её результат не используется</td>
+      </tr>
+      <tr>
+        <td><code>APIRouter</code></td>
+        <td><code>APIRouter(dependencies=[...])</code></td>
+        <td>правило относится ко всему ресурсу</td>
+      </tr>
+      <tr>
+        <td><code>FastAPI</code></td>
+        <td><code>FastAPI(dependencies=[...])</code></td>
+        <td>правило действительно для всего приложения</td>
+      </tr>
+      </tbody>
+    </table>
+    <p>На следующей лекции этот механизм позволит защищать весь роутер аутентификацией без копирования проверки токена.</p>
+    <hr>
+
+    <h2>Зависимости с <code>yield</code></h2>
+    <pre class="language-python"><code>def get_resource():
+    resource = open_resource()
+    try:
+        yield resource
+    finally:
+        resource.close()
+</code></pre>
+    <table>
+      <thead>
+      <tr>
+        <th>Часть функции</th>
+        <th>Когда выполняется</th>
+      </tr>
+      </thead>
+      <tbody>
+      <tr>
+        <td>код до <code>yield</code></td>
+        <td>до запуска эндпоинта</td>
+      </tr>
+      <tr>
+        <td>значение после <code>yield</code></td>
+        <td>передаётся эндпоинту как результат зависимости</td>
+      </tr>
+      <tr>
+        <td>блок <code>finally</code></td>
+        <td>после обработки запроса, даже если возникло исключение</td>
+      </tr>
+      </tbody>
+    </table>
+    <p>Главный будущий пример — сессия базы данных. Открывать и закрывать её вручную в каждом эндпоинте не потребуется.</p>
+    <hr>
+
+    <h2>Жизненный цикл приложения</h2>
+    <p><b>Lifespan</b> управляет ресурсами, которые создаются один раз при запуске процесса приложения и освобождаются при его остановке.</p>
+    <pre class="language-python"><code>from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+
+from fastapi import FastAPI
+
+from app.storage import ProductStorage
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    app.state.product_storage = ProductStorage()
+
+    yield
+
+    app.state.product_storage.clear()
+</code></pre>
+    <p>Код до <code>yield</code> выполняется при старте, после <code>yield</code> — при корректном завершении приложения.</p>
+    <hr>
+
+    <h2><code>yield</code>-зависимость или lifespan</h2>
+    <table>
+      <thead>
+      <tr>
+        <th>Вопрос</th>
+        <th>Зависимость с <code>yield</code></th>
+        <th>Lifespan</th>
+      </tr>
+      </thead>
+      <tbody>
+      <tr>
+        <td>частота</td>
+        <td>для каждого запроса</td>
+        <td>один раз на процесс приложения</td>
+      </tr>
+      <tr>
+        <td>типичный ресурс</td>
+        <td>сессия БД, транзакция, временный файл</td>
+        <td>пул соединений, HTTP-клиент, ML-модель</td>
+      </tr>
+      <tr>
+        <td>как получить в эндпоинте</td>
+        <td>через <code>Depends</code></td>
+        <td>обычно через зависимость, читающую <code>app.state</code></td>
+      </tr>
+      </tbody>
+    </table>
+    <p>В нашем примере <code>ProductStorage</code> существует всё время работы приложения, а <code>get_product_storage</code> выдаёт ссылку на него конкретному запросу.</p>
+    <hr>
+
+    <h2>Настройки приложения</h2>
+    <p>Настройки — значения, которые меняются между окружениями или не должны быть записаны в исходном коде:</p>
+    <ul>
+      <li>название приложения и режим отладки.</li>
+      <li>URL базы данных и внешних сервисов.</li>
+      <li>секреты подписи токенов.</li>
+      <li>таймауты, лимиты и флаги функций.</li>
+    </ul>
+    <p>Переменные окружения всегда приходят как строки. <code>pydantic-settings</code> преобразует и валидирует их по типизированной модели.</p>
+    <pre class="language-bash"><code>uv add pydantic-settings
+</code></pre>
+    <hr>
+
+    <h2><code>Settings</code> и <code>.env</code></h2>
+    <p><b><code>app/core/config.py</code></b></p>
+    <pre class="language-python"><code>from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class Settings(BaseSettings):
+    app_name: str = "Products API"
+    debug: bool = False
+    api_prefix: str = "/api/v1"
+
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+</code></pre>
+    <p><b><code>.env</code></b></p>
+    <pre class="language-properties"><code>APP_NAME=Products API Local
+DEBUG=true
+API_PREFIX=/api/v1
+</code></pre>
+    <p>Значения из окружения имеют приоритет над значениями по умолчанию. Имена полей читаются без учёта регистра.</p>
+    <hr>
+
+    <h2><code>.env</code>, <code>.env.example</code> и Git</h2>
+    <table>
+      <thead>
+      <tr>
+        <th>Файл</th>
+        <th>Назначение</th>
+        <th>Коммитить?</th>
+      </tr>
+      </thead>
+      <tbody>
+      <tr>
+        <td><code>.env</code></td>
+        <td>реальные локальные значения и секреты</td>
+        <td>нет</td>
+      </tr>
+      <tr>
+        <td><code>.env.example</code></td>
+        <td>список необходимых переменных без секретных значений</td>
+        <td>да</td>
+      </tr>
+      <tr>
+        <td>переменные окружения Docker/CI</td>
+        <td>настройки тестового и production-окружения</td>
+        <td>задаются платформой</td>
+      </tr>
+      </tbody>
+    </table>
+    <p><b><code>.gitignore</code></b></p>
+    <pre><code>.env
+.venv/
+__pycache__/
+</code></pre>
+    <p><code>.env</code> удобен для локальной разработки, но не является специальным защищённым хранилищем секретов.</p>
+    <hr>
+
+    <h2>Настройки как зависимость</h2>
+    <p><b><code>app/dependencies.py</code></b></p>
+    <pre class="language-python"><code>from functools import lru_cache
+from typing import Annotated
+
+from fastapi import Depends
+
+from app.core.config import Settings
+
+
+@lru_cache
+def get_settings() -> Settings:
+    return Settings()
+
+
+SettingsDep = Annotated[
+    Settings,
+    Depends(get_settings),
+]
+</code></pre>
+    <p><code>lru_cache</code> создаёт <code>Settings</code> только при первом вызове, поэтому файл <code>.env</code> не читается для каждого запроса.</p>
+    <p>В тестах зависимость можно заменить через <code>app.dependency_overrides</code>, а кэш — очистить вызовом <code>get_settings.cache_clear()</code>.</p>
+    <hr>
+
+    <h2>Фабрика приложения</h2>
+    <p><b><code>app/main.py</code></b></p>
+    <pre class="language-python"><code>from fastapi import FastAPI
+
+from app.core.config import Settings
+from app.dependencies import get_settings
+from app.lifespan import lifespan
+from app.routers import products
+
+
+def create_app(settings: Settings | None = None) -> FastAPI:
+    settings = settings or get_settings()
+
+    application = FastAPI(
+        title=settings.app_name,
+        debug=settings.debug,
+        lifespan=lifespan,
+    )
+    application.include_router(
+        products.router,
+        prefix=settings.api_prefix,
+    )
+    return application
+
+
+app = create_app()
+</code></pre>
+    <p>В дереве проекта появляется <code>app/lifespan.py</code>. Фабрика не обязательна для каждого маленького API, но здесь она делает точку сборки явной.</p>
+    <p>После переноса точки входа сервер запускается из корня проекта:</p>
+    <pre class="language-bash"><code>uv run fastapi dev app/main.py
+</code></pre>
+    <p>Так <code>.env</code> также ищется относительно корня, из которого запускается команда.</p>
+    <hr>
+
+    <h2>Как собирается запрос</h2>
+    <table>
+      <thead>
+      <tr>
+        <th>Шаг</th>
+        <th>Что происходит</th>
+      </tr>
+      </thead>
+      <tbody>
+      <tr>
+        <td>1</td>
+        <td><code>create_app()</code> читает настройки и создаёт FastAPI</td>
+      </tr>
+      <tr>
+        <td>2</td>
+        <td>lifespan создаёт <code>ProductStorage</code> в <code>app.state</code></td>
+      </tr>
+      <tr>
+        <td>3</td>
+        <td><code>include_router()</code> подключает Products API с префиксом версии</td>
+      </tr>
+      <tr>
+        <td>4</td>
+        <td>FastAPI строит граф зависимостей для входящего запроса</td>
+      </tr>
+      <tr>
+        <td>5</td>
+        <td>зависимости получают хранилище и находят товар либо возвращают <code>404</code></td>
+      </tr>
+      <tr>
+        <td>6</td>
+        <td>эндпоинт выполняет действие и сериализует ответ по Pydantic-схеме</td>
+      </tr>
+      </tbody>
+    </table>
+    <hr>
+
+    <h2>Итоговая структура</h2>
+    <pre><code>project/
+├── .env
+├── .env.example
+├── .gitignore
+└── app/
+    ├── __init__.py
+    ├── main.py
+    ├── lifespan.py
+    ├── schemas.py
+    ├── storage.py
+    ├── dependencies.py
+    ├── core/
+    │   ├── __init__.py
+    │   └── config.py
+    └── routers/
+        ├── __init__.py
+        └── products.py
+</code></pre>
+    <p>Это не единственно правильная структура FastAPI. Она соответствует текущему размеру проекта и оставляет понятные места для будущих модулей <code>auth</code>, базы данных и тестов.</p>
+    <hr>
+
+    <h2>Практика</h2>
+    <p>Задача: разделить готовый Products API на модули, не изменив его поведение для клиента.</p>
+    <ol>
+      <li>Создайте пакеты <code>app/routers</code> и <code>app/core</code> с файлами <code>__init__.py</code>.</li>
+      <li>Перенесите CRUD-эндпоинты в <code>app/routers/products.py</code> и подключите роутер через <code>include_router()</code>.</li>
+      <li>Перенесите in-memory-хранилище в класс <code>ProductStorage</code> внутри <code>app/storage.py</code>.</li>
+      <li>Создайте lifespan, который помещает одно хранилище в <code>app.state</code>.</li>
+      <li>Добавьте <code>StorageDep</code> и <code>ProductDep</code>, затем уберите повторяющуюся проверку <code>404</code> из эндпоинтов.</li>
+      <li>Добавьте <code>Settings</code>, файлы <code>.env</code>/<code>.env.example</code> и зависимость <code>get_settings()</code>.</li>
+      <li>Соберите приложение в <code>create_app()</code> и добавьте общий префикс <code>/api/v1</code>.</li>
+      <li>Проверьте в Swagger UI полный CRUD, ошибки <code>404</code>/<code>422</code> и итоговые URL.</li>
+    </ol>
+    <p>Дополнительная задача: добавьте зависимость, которая читает заголовок <code>X-Request-ID</code>, и подключите её ко всему Products-роутеру.</p>
+    <hr>
+
+    <h2>Итоги</h2>
+    <p>На этой лекции мы научились:</p>
+    <ul>
+      <li>разделять FastAPI-приложение на Python-пакеты и модули.</li>
+      <li>группировать эндпоинты через <code>APIRouter</code> и подключать их через <code>include_router()</code>.</li>
+      <li>получать ресурсы и переиспользовать проверки через <code>Depends</code>.</li>
+      <li>понимать граф зависимостей и кэширование внутри запроса.</li>
+      <li>различать зависимости с <code>yield</code> и lifespan приложения.</li>
+      <li>читать настройки из переменных окружения через <code>pydantic-settings</code>.</li>
+      <li>собирать приложение в явной точке входа <code>create_app()</code>.</li>
+    </ul>
+    <p>На следующей лекции добавим пользователей, безопасное хранение паролей, OAuth2 Bearer и JWT, используя подготовленные роутеры, зависимости и настройки.</p>
+    <hr>
+  </db-content>
+  <footer class="site-footer">
+    <div class="footer-logo-link"></div>
+  </footer>
+</div>
+</body>
+</html>

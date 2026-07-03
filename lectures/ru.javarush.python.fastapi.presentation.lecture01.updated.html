@@ -1,0 +1,598 @@
+<!doctype html>
+<html lang="ru" class="light">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link href="https://super-dev-styles.github.io/website-assets/styles.css" rel="stylesheet">
+  <link href="https://super-dev-styles.github.io/website-assets/view.css" rel="stylesheet">
+  <link href="https://super-dev-styles.github.io/website-assets/slides.css" rel="stylesheet">
+  <script src="https://super-dev-styles.github.io/website-assets/slides.js" defer></script>
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism.min.css" rel="stylesheet"/>
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/plugins/line-numbers/prism-line-numbers.min.css" rel="stylesheet"/>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-core.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/plugins/autoloader/prism-autoloader.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/plugins/line-numbers/prism-line-numbers.min.js"></script>
+  <link href="https://super-dev-styles.github.io/website-assets/styles.css" rel="stylesheet">
+  <link href="https://super-dev-styles.github.io/website-assets/view.css" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+  <script>mermaid.initialize({ startOnLoad: false });</script>
+  <title>Лекция 1: Введение в FastAPI и первый REST API</title>
+</head>
+<body>
+<div class="content lecture-content post-content">
+  <db-content>
+    <h1>Лекция 1: Введение в FastAPI и первый REST API</h1>
+    <p>FastAPI — современный Python-фреймворк для создания HTTP API. Он опирается на стандартные аннотации типов Python, Pydantic для валидации данных и ASGI-серверы вроде Uvicorn для обработки запросов.</p>
+    <p>В этой лекции мы соберем первый рабочий API: настроим окружение, запустим приложение, разберем маршруты, параметры пути и запроса, модели Pydantic v2, валидацию входных данных, ответы через <code>response_model</code>, обработку ожидаемых ошибок и автоматическую документацию OpenAPI.</p>
+    <p>Студенты уже знакомы с Python, ООП, архитектурой веб-приложений, Docker и SQL, поэтому мы не будем долго объяснять HTTP с нуля. Вместо этого сразу свяжем известные backend-концепции с тем, как они реализуются в FastAPI.</p>
+    <hr>
+
+    <h2>Что такое FastAPI</h2>
+    <p><b>FastAPI</b> — это веб-фреймворк на Python для создания API. Его сильная сторона — не магия, а удачная связка нескольких зрелых идей:</p>
+    <ul>
+      <li><b>type hints</b>: аннотации типов описывают контракт данных прямо в коде.</li>
+      <li><b>Pydantic</b>: проверяет, преобразует и сериализует данные по этим типам.</li>
+      <li><b>Starlette</b>: дает ASGI-основу, маршрутизацию, middleware, request/response-объекты.</li>
+      <li><b>Uvicorn</b>: запускает приложение как ASGI-сервер.</li>
+      <li><b>OpenAPI</b>: документация генерируется из реального кода, а не ведется вручную отдельно.</li>
+    </ul>
+    <p>FastAPI особенно удобен для JSON API, микросервисов, backend-for-frontend, внутренних сервисов, интеграций и приложений, где важны явные контракты данных.</p>
+    <div class="lesson-note lesson-note--info">
+      <div class="lesson-note__container">
+        <div class="lesson-note__head">Важно</div>
+        <div class="lesson-note__content">
+          <p>FastAPI не делает приложение быстрым автоматически. Производительность зависит от БД, сетевых вызовов, блокирующего кода, количества воркеров, индексов и архитектуры. Фреймворк просто дает хорошие инструменты, чтобы не мешать этим частям работать эффективно.</p>
+        </div>
+      </div>
+    </div>
+    <hr>
+
+    <h2>Как запрос проходит через FastAPI</h2>
+    <p>Один HTTP-запрос проходит через ASGI-сервер, приложение FastAPI, маршрутизацию, валидацию входных данных, ваш код и сериализацию ответа.</p>
+    <div class="mermaid">
+      graph TD
+      A[Клиент] -- HTTP-запрос --> B[Uvicorn ASGI server]
+      B -- ASGI scope receive send --> C{FastAPI app}
+      C -- Поиск маршрута --> D[Path operation function]
+      C -- Валидация path query body --> E[Pydantic v2]
+      E --> D
+      D -- Python-объекты dict/list/model --> F[Сериализация ответа]
+      F -- JSON + status code --> B
+      B -- HTTP-ответ --> A
+
+      style B fill:#f9f,stroke:#333,stroke-width:2px;
+      style C fill:#ccf,stroke:#333,stroke-width:2px;
+      style E fill:#cfc,stroke:#333,stroke-width:2px;
+    </div>
+    <p>На первой лекции мы работаем с самым важным путем: request -> endpoint -> response. Middleware, зависимости, база данных и lifespan будут разобраны позже.</p>
+    <hr>
+
+    <h2>FastAPI, Django и Flask</h2>
+    <p>Сравнение полезно не для спора "кто лучше", а чтобы понимать область применения.</p>
+    <table>
+      <thead>
+      <tr>
+        <th>Критерий</th>
+        <th>Django</th>
+        <th>Flask</th>
+        <th>FastAPI</th>
+      </tr>
+      </thead>
+      <tbody>
+      <tr>
+        <td><b>Типичный фокус</b></td>
+        <td>полноценные сайты, админка, ORM, шаблоны</td>
+        <td>легкие приложения и гибкие прототипы</td>
+        <td>API-first приложения и сервисы</td>
+      </tr>
+      <tr>
+        <td><b>Структура</b></td>
+        <td>много соглашений из коробки</td>
+        <td>минимум соглашений</td>
+        <td>умеренно свободная структура</td>
+      </tr>
+      <tr>
+        <td><b>Валидация API</b></td>
+        <td>Django REST Framework serializers</td>
+        <td>обычно сторонние библиотеки</td>
+        <td>Pydantic-модели и type hints</td>
+      </tr>
+      <tr>
+        <td><b>Документация</b></td>
+        <td>нужна настройка DRF/schema tools</td>
+        <td>нужна сторонняя настройка</td>
+        <td>Swagger UI и ReDoc из коробки</td>
+      </tr>
+      <tr>
+        <td><b>Когда выбирать</b></td>
+        <td>когда нужна большая готовая веб-платформа</td>
+        <td>когда нужен маленький гибкий слой</td>
+        <td>когда основной продукт — HTTP API</td>
+      </tr>
+      </tbody>
+    </table>
+    <p>FastAPI не заменяет Django во всех случаях. Если нужна админка, шаблоны, встроенная ORM и монолитная платформа, Django часто быстрее. Если нужен компактный typed API, FastAPI обычно удобнее.</p>
+    <hr>
+
+    <h2>Установка и запуск</h2>
+    <p>Современный удобный вариант для старта — использовать <code>uv</code>. Он сам создаст локальное окружение <code>.venv</code> и будет запускать команды внутри него, поэтому активировать окружение вручную не нужно.</p>
+    <p><b>Инициализация проекта и установка зависимостей:</b></p>
+    <pre><code class="language-bash">uv init fastapi-intro
+cd fastapi-intro
+uv add "fastapi[standard]"
+</code></pre>
+    <p><b>Запуск в разработке:</b></p>
+    <pre><code class="language-bash">uv run fastapi dev main.py
+</code></pre>
+    <p>Если CLI недоступен или вы хотите явно указать ASGI-приложение, можно использовать Uvicorn напрямую:</p>
+    <pre><code class="language-bash">uv run uvicorn main:app --reload
+</code></pre>
+    <ul>
+      <li><code>uv init</code> — создает новый Python-проект.</li>
+      <li><code>uv add</code> — добавляет зависимость в проект и фиксирует ее в <code>pyproject.toml</code>/<code>uv.lock</code>.</li>
+      <li><code>uv run</code> — запускает команду в окружении проекта без ручной активации <code>.venv</code>.</li>
+      <li><code>fastapi dev</code> — удобная команда для локальной разработки с auto-reload.</li>
+      <li><code>fastapi run</code> — команда для запуска приложения без dev-режима.</li>
+    </ul>
+    <hr>
+
+    <h2>Минимальное приложение</h2>
+    <p>Создайте файл <code>main.py</code>. Это минимальный API с двумя GET-эндпоинтами.</p>
+    <pre class="language-python"><code>from fastapi import FastAPI
+
+app = FastAPI()
+
+
+@app.get("/")
+def read_root():
+    return {"message": "Hello, FastAPI!"}
+
+
+@app.get("/health")
+def healthcheck():
+    return {"status": "ok"}
+</code></pre>
+    <p>Откройте в браузере:</p>
+    <ul>
+      <li><code>http://127.0.0.1:8000/</code> — обычный JSON-ответ.</li>
+      <li><code>http://127.0.0.1:8000/health</code> — простой health-check.</li>
+      <li><code>http://127.0.0.1:8000/docs</code> — Swagger UI.</li>
+      <li><code>http://127.0.0.1:8000/redoc</code> — ReDoc.</li>
+    </ul>
+    <div class="lesson-note lesson-note--info">
+      <div class="lesson-note__container">
+        <div class="lesson-note__head">Термин</div>
+        <div class="lesson-note__content">
+          <p>Функция, привязанная к HTTP-методу и пути, называется <b>path operation function</b>. В разговорной речи часто говорят "эндпоинт".</p>
+        </div>
+      </div>
+    </div>
+    <hr>
+
+    <h2>Структура учебного проекта</h2>
+    <p>Для первой лекции достаточно одного файла. Но сразу полезно видеть, куда будет расти проект.</p>
+    <pre><code>fastapi_intro/
+├── main.py
+├── requirements.txt
+└── README.md
+</code></pre>
+    <p>Через несколько лекций структура станет модульной:</p>
+    <pre><code>fastapi_app/
+├── app/
+│   ├── __init__.py
+│   ├── main.py
+│   ├── api/
+│   │   └── routers/
+│   │       └── products.py
+│   ├── schemas/
+│   │   └── product.py
+│   ├── services/
+│   │   └── product_service.py
+│   └── core/
+│       └── config.py
+├── tests/
+└── requirements.txt
+</code></pre>
+    <p>Сегодня все оставляем в <code>main.py</code>, чтобы не размазывать первые идеи по нескольким файлам.</p>
+    <hr>
+
+    <h2>Path parameters</h2>
+    <p><b>Path parameters</b> — динамические части URL. Они объявляются в пути через фигурные скобки и приходят в функцию как аргументы.</p>
+    <pre class="language-python"><code>from fastapi import FastAPI
+
+app = FastAPI()
+
+
+@app.get("/products/{product_id}")
+def get_product(product_id: int):
+    return {"product_id": product_id}
+
+
+@app.get("/users/{username}")
+def get_user(username: str):
+    return {"username": username}
+</code></pre>
+    <p>FastAPI использует аннотации типов для автоматического преобразования и валидации:</p>
+    <ul>
+      <li><code>GET /products/10</code> -> <code>product_id</code> станет числом <code>10</code>.</li>
+      <li><code>GET /products/abc</code> -> FastAPI вернет ошибку <code>422 Unprocessable Entity</code>.</li>
+    </ul>
+    <p>Для дополнительной валидации используйте <code>Path</code> и <code>Annotated</code>. <code>Annotated</code> позволяет оставить основной тип параметра обычным Python-типом (<code>int</code>), а рядом передать FastAPI дополнительные правила. <code>Path</code> говорит, что это именно параметр пути, и задает ограничения вроде <code>ge=1</code>.</p>
+    <pre class="language-python"><code>from typing import Annotated
+
+from fastapi import FastAPI, Path
+
+app = FastAPI()
+
+
+@app.get("/products/{product_id}")
+def get_product(
+    product_id: Annotated[int, Path(ge=1, description="ID товара")]
+):
+    return {"product_id": product_id}
+</code></pre>
+    <hr>
+
+    <h2>Query parameters</h2>
+    <p><b>Query parameters</b> — параметры после <code>?</code> в URL. Обычно они используются для фильтрации, поиска, сортировки и пагинации.</p>
+    <pre class="language-python"><code>from typing import Annotated
+
+from fastapi import FastAPI, Query
+
+app = FastAPI()
+
+
+@app.get("/products")
+def list_products(
+    search: Annotated[str | None, Query(min_length=2, max_length=50)] = None,
+    limit: Annotated[int, Query(ge=1, le=100)] = 10,
+    only_available: bool = True,
+):
+    return {
+        "search": search,
+        "limit": limit,
+        "only_available": only_available,
+    }
+</code></pre>
+    <p>Примеры запросов:</p>
+    <ul>
+      <li><code>/products</code> — все параметры берутся по умолчанию.</li>
+      <li><code>/products?search=phone&amp;limit=20</code> — поиск и лимит.</li>
+      <li><code>/products?only_available=false</code> — FastAPI преобразует строку в <code>bool</code>.</li>
+    </ul>
+    <p><code>Query</code> работает похоже на <code>Path</code>, но применяется к query-параметрам. В примере <code>search</code> может быть строкой или <code>None</code>, а <code>Query(min_length=2, max_length=50)</code> добавляет правила валидации и описание в OpenAPI. <code>limit</code> получает числовые границы через <code>ge</code> и <code>le</code>.</p>
+    <div class="lesson-note lesson-note--info">
+      <div class="lesson-note__container">
+        <div class="lesson-note__head">Pydantic v2</div>
+        <div class="lesson-note__content">
+          <p>Для регулярных выражений используйте параметр <code>pattern</code>, а не <code>regex</code>. Старое имя <code>regex</code> устарело.</p>
+        </div>
+      </div>
+    </div>
+    <hr>
+
+    <h2>Какие параметры может принимать эндпоинт</h2>
+    <p>Функция-эндпоинт может получать данные из разных частей HTTP-запроса. FastAPI определяет источник параметра по имени в пути, типу, значению по умолчанию и специальным функциям вроде <code>Query</code>, <code>Path</code>, <code>Header</code>, <code>Cookie</code>, <code>Form</code>, <code>File</code> и <code>Depends</code>.</p>
+    <table>
+      <thead>
+      <tr>
+        <th>Источник</th>
+        <th>Как объявляется</th>
+        <th>Пример запроса</th>
+      </tr>
+      </thead>
+      <tbody>
+      <tr>
+        <td><b>Path</b></td>
+        <td><code>product_id: int</code> в пути <code>/products/{product_id}</code></td>
+        <td><code>GET /products/10</code></td>
+      </tr>
+      <tr>
+        <td><b>Query</b></td>
+        <td><code>limit: int = 10</code> или <code>Query(...)</code></td>
+        <td><code>GET /products?limit=20</code></td>
+      </tr>
+      <tr>
+        <td><b>Body</b></td>
+        <td>Pydantic-модель: <code>product: ProductCreate</code></td>
+        <td><code>POST /products</code> с JSON-телом</td>
+      </tr>
+      <tr>
+        <td><b>Header</b></td>
+        <td><code>user_agent: Annotated[str | None, Header()]</code></td>
+        <td>заголовок <code>User-Agent</code></td>
+      </tr>
+      <tr>
+        <td><b>Cookie</b></td>
+        <td><code>session_id: Annotated[str | None, Cookie()]</code></td>
+        <td>cookie <code>session_id=...</code></td>
+      </tr>
+      <tr>
+        <td><b>Form</b></td>
+        <td><code>username: Annotated[str, Form()]</code></td>
+        <td>HTML-форма или <code>application/x-www-form-urlencoded</code></td>
+      </tr>
+      <tr>
+        <td><b>File</b></td>
+        <td><code>file: Annotated[UploadFile, File()]</code></td>
+        <td><code>multipart/form-data</code></td>
+      </tr>
+      <tr>
+        <td><b>Dependency</b></td>
+        <td><code>user: dict = Depends(get_current_user)</code></td>
+        <td>значение собирается зависимостью</td>
+      </tr>
+      </tbody>
+    </table>
+    <pre class="language-python"><code>from typing import Annotated
+
+from fastapi import Cookie, Depends, Header, Query
+
+
+def get_current_user():
+    return {"username": "alex"}
+
+
+@app.get("/dashboard/{section}")
+def dashboard(
+    section: str,
+    page: Annotated[int, Query(ge=1)] = 1,
+    user_agent: Annotated[str | None, Header()] = None,
+    session_id: Annotated[str | None, Cookie()] = None,
+    current_user: dict = Depends(get_current_user),
+):
+    return {
+        "section": section,
+        "page": page,
+        "user_agent": user_agent,
+        "session_id": session_id,
+        "current_user": current_user,
+    }
+</code></pre>
+    <p>На этой лекции подробно используем path, query и body. Headers, cookies, forms, files и dependencies появятся в следующих темах.</p>
+    <hr>
+
+    <h2>Request body и Pydantic</h2>
+    <p>Для JSON-тела запроса удобно описывать контракт через Pydantic-модель. FastAPI сам прочитает JSON, создаст объект модели, провалидирует поля и передаст его в функцию.</p>
+    <p><code>Field</code> используется внутри Pydantic-моделей для правил конкретного поля: минимальная и максимальная длина строки, числовые границы, описание для документации и значение по умолчанию. В примере <code>name</code> должен быть длиной от 3 до 80 символов, а <code>price</code> должен быть больше нуля.</p>
+    <pre class="language-python"><code>from pydantic import BaseModel, Field
+
+
+class ProductCreate(BaseModel):
+    name: str = Field(min_length=3, max_length=80)
+    price: float = Field(gt=0)
+    description: str | None = None
+    is_available: bool = True
+</code></pre>
+    <p>Теперь модель можно использовать в POST-эндпоинте.</p>
+    <pre class="language-python"><code>from fastapi import FastAPI, status
+from pydantic import BaseModel, Field
+
+app = FastAPI()
+
+
+class ProductCreate(BaseModel):
+    name: str = Field(min_length=3, max_length=80)
+    price: float = Field(gt=0)
+    description: str | None = None
+    is_available: bool = True
+
+
+@app.post("/products", status_code=status.HTTP_201_CREATED)
+def create_product(product: ProductCreate):
+    return {
+        "message": "Товар создан",
+        "product": product.model_dump(),
+    }
+</code></pre>
+    <p><code>model_dump()</code> — актуальный способ Pydantic v2 преобразовать модель в словарь. В старом коде можно встретить <code>.dict()</code>, но в новых материалах лучше сразу использовать <code>model_dump()</code>.</p>
+    <hr>
+
+    <h2>Схемы входа и выхода</h2>
+    <p>В реальных API входная и выходная модели часто различаются. Например, клиент присылает название и цену, а сервер возвращает еще и <code>id</code>.</p>
+    <pre class="language-python"><code>from pydantic import BaseModel, Field
+
+
+class ProductCreate(BaseModel):
+    name: str = Field(min_length=3, max_length=80)
+    price: float = Field(gt=0)
+    description: str | None = None
+    is_available: bool = True
+
+
+class ProductRead(BaseModel):
+    id: int
+    name: str
+    price: float
+    description: str | None = None
+    is_available: bool
+</code></pre>
+    <p><code>response_model</code> заставляет FastAPI проверить и отфильтровать ответ. Это защищает API от случайной утечки лишних полей.</p>
+    <pre class="language-python"><code>@app.get("/products/{product_id}", response_model=ProductRead)
+def get_product(product_id: int):
+    product_from_db = {
+        "id": product_id,
+        "name": "Keyboard",
+        "price": 99.0,
+        "description": None,
+        "is_available": True,
+        "internal_margin": 0.42,
+    }
+    return product_from_db
+</code></pre>
+    <p>Поле <code>internal_margin</code> не попадет в JSON-ответ, потому что его нет в <code>ProductRead</code>.</p>
+    <hr>
+
+    <h2>HTTPException</h2>
+    <p>Если ошибка ожидаемая и связана с запросом клиента, возвращайте ее через <code>HTTPException</code>: ресурс не найден, недостаточно прав, конфликт данных, неверный формат бизнес-данных.</p>
+    <pre class="language-python"><code>from fastapi import FastAPI, HTTPException, status
+
+app = FastAPI()
+
+products_db = {
+    1: {"id": 1, "name": "Keyboard", "price": 99.0, "is_available": True},
+}
+
+
+@app.get("/products/{product_id}")
+def get_product(product_id: int):
+    product = products_db.get(product_id)
+    if product is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Товар не найден",
+        )
+    return product
+</code></pre>
+    <p>FastAPI сам превратит исключение в HTTP-ответ с нужным статус-кодом и JSON-телом:</p>
+    <pre><code class="language-json">{
+  "detail": "Товар не найден"
+}
+</code></pre>
+    <hr>
+
+    <h2>OpenAPI, Swagger UI и ReDoc</h2>
+    <p>FastAPI строит OpenAPI-схему из маршрутов, типов, моделей Pydantic, статусов и метаданных.</p>
+    <ul>
+      <li><code>/docs</code> — Swagger UI, удобно тестировать запросы руками.</li>
+      <li><code>/redoc</code> — ReDoc, удобно читать контракт API.</li>
+      <li><code>/openapi.json</code> — машинно-читаемая схема API.</li>
+    </ul>
+    <p>Метаданные приложения помогают сделать документацию понятнее.</p>
+    <pre class="language-python"><code>app = FastAPI(
+    title="Products API",
+    description="Учебное API для первой лекции FastAPI",
+    version="1.0.0",
+)
+</code></pre>
+    <p>Метаданные эндпоинта тоже попадают в документацию:</p>
+    <pre class="language-python"><code>@app.get(
+    "/products/{product_id}",
+    response_model=ProductRead,
+    summary="Получить товар по ID",
+    tags=["products"],
+)
+def get_product(product_id: int):
+    ...
+</code></pre>
+    <hr>
+
+    <h2>Мини-проект: Products API</h2>
+    <p>Финальный пример объединяет все темы лекции. Это in-memory API без базы данных: данные исчезают при перезапуске сервера. Так проще сфокусироваться на FastAPI, а SQLAlchemy появится позже.</p>
+    <pre class="language-python"><code>from typing import Annotated
+
+from fastapi import FastAPI, HTTPException, Path, Query, status
+from pydantic import BaseModel, Field
+
+app = FastAPI(
+    title="Products API",
+    description="Учебное API для первой лекции FastAPI",
+    version="1.0.0",
+)
+
+
+class ProductCreate(BaseModel):
+    name: str = Field(min_length=3, max_length=80)
+    price: float = Field(gt=0)
+    description: str | None = None
+    is_available: bool = True
+
+
+class ProductRead(ProductCreate):
+    id: int
+
+
+products_db: dict[int, ProductRead] = {
+    1: ProductRead(id=1, name="Keyboard", price=99.0),
+    2: ProductRead(id=2, name="Mouse", price=49.0),
+}
+next_product_id = 3
+
+
+@app.get("/", tags=["system"])
+def read_root():
+    return {"message": "Products API is running"}
+
+
+@app.get("/health", tags=["system"])
+def healthcheck():
+    return {"status": "ok"}
+
+
+@app.get("/products", response_model=list[ProductRead], tags=["products"])
+def list_products(
+    search: Annotated[str | None, Query(min_length=2, max_length=50)] = None,
+    limit: Annotated[int, Query(ge=1, le=100)] = 10,
+):
+    products = list(products_db.values())
+    if search is not None:
+        products = [
+            product for product in products
+            if search.lower() in product.name.lower()
+        ]
+    return products[:limit]
+
+
+@app.get("/products/{product_id}", response_model=ProductRead, tags=["products"])
+def get_product(
+    product_id: Annotated[int, Path(ge=1, description="ID товара")]
+):
+    product = products_db.get(product_id)
+    if product is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Товар не найден",
+        )
+    return product
+
+
+@app.post(
+    "/products",
+    response_model=ProductRead,
+    status_code=status.HTTP_201_CREATED,
+    tags=["products"],
+)
+def create_product(product_data: ProductCreate):
+    global next_product_id
+
+    product = ProductRead(id=next_product_id, **product_data.model_dump())
+    products_db[next_product_id] = product
+    next_product_id += 1
+
+    return product
+</code></pre>
+    <p>Для проверки откройте <code>/docs</code>, создайте товар через POST, затем получите список через GET.</p>
+    <hr>
+
+    <h2>Практика</h2>
+    <p>Задания рассчитаны на 15-25 минут. Их можно делать прямо в Swagger UI и в коде <code>main.py</code>.</p>
+    <ol>
+      <li>Добавьте поле <code>category</code> в <code>ProductCreate</code> и <code>ProductRead</code>. Ограничьте длину от 2 до 40 символов.</li>
+      <li>Добавьте query-параметр <code>only_available</code> в <code>list_products</code>.</li>
+      <li>Добавьте эндпоинт <code>DELETE /products/{product_id}</code>. Если товара нет, верните <code>404</code>.</li>
+      <li>Добавьте эндпоинт <code>PATCH /products/{product_id}</code> с отдельной моделью <code>ProductUpdate</code>, где все поля опциональны.</li>
+      <li>Проверьте, как меняется документация <code>/docs</code> после каждого изменения модели.</li>
+    </ol>
+    <hr>
+
+    <h2>Итоги</h2>
+    <p>На этой лекции мы научились:</p>
+    <ul>
+      <li>понимать роль FastAPI, Pydantic, Uvicorn, ASGI и OpenAPI.</li>
+      <li>создавать и запускать минимальное приложение.</li>
+      <li>писать GET и POST-эндпоинты.</li>
+      <li>использовать path и query-параметры с валидацией.</li>
+      <li>создавать Pydantic-модели для request body и response body.</li>
+      <li>возвращать ожидаемые ошибки через <code>HTTPException</code>.</li>
+      <li>проверять API через Swagger UI.</li>
+    </ul>
+    <p>На следующей лекции будем разбирать REST-подход, полные CRUD-операции, <code>PUT</code> vs <code>PATCH</code>, статус-коды и асинхронную модель выполнения FastAPI.</p>
+    <hr>
+  </db-content>
+  <footer class="site-footer">
+    <div class="footer-logo-link">
+    </div>
+  </footer>
+</div>
+</body>
+</html>
