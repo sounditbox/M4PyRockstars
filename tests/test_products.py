@@ -83,6 +83,36 @@ def test_product_lifecycle(admin_client):
     assert missing.status_code == 404
 
 
+def test_replace_product(admin_client):
+    created = admin_client.post(
+        "/api/v1/products",
+        json={
+            "name": "Gaming Mouse",
+            "category": "electronics",
+            "price": 49.90,
+        },
+    )
+    product_id = created.json()["id"]
+
+    replaced = admin_client.put(
+        f"/api/v1/products/{product_id}",
+        json={
+            "name": "Mechanical Keyboard",
+            "category": "electronics",
+            "price": 129.90,
+            "is_available": False,
+        },
+    )
+
+    assert replaced.status_code == 200
+    body = replaced.json()
+    assert body["id"] == product_id
+    assert body["name"] == "Mechanical Keyboard"
+    assert body["category"] == "electronics"
+    assert body["price"] == 129.90
+    assert body["is_available"] is False
+
+
 @pytest.mark.parametrize(
     ("payload", "field"),
     [

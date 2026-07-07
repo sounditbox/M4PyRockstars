@@ -1,11 +1,10 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Query, Path, HTTPException
+from fastapi import APIRouter, Query
 from sqlalchemy import select
-from starlette.status import HTTP_201_CREATED, HTTP_404_NOT_FOUND, \
-    HTTP_204_NO_CONTENT
+from starlette.status import HTTP_201_CREATED, HTTP_204_NO_CONTENT
 
-from app.dependencies import StorageDep, ProductDep, SessionDep
+from app.dependencies import ProductDep, SessionDep
 from app.models import Product
 from app.schemas import ProductRead, ProductCreate, ProductUpdate
 from app.security import AdminRoleDep
@@ -18,9 +17,6 @@ router = APIRouter(
 SearchParam = Annotated[str | None, Query(min_length=2, max_length=50)]
 LimitParam = Annotated[int, Query(ge=1, le=100)]
 CategoryParam = Annotated[str | None, Query(min_length=2, max_length=40)]
-ProductID = Annotated[int, Path(ge=1, description="ID товара")]
-
-
 @router.post(
     "",
     response_model=ProductRead,
@@ -74,19 +70,16 @@ async def get_product(
             description="Update product endpoint description"
             )
 def replace_product(
-        product_id: ProductID,
+        product: ProductDep,
         product_data: ProductCreate,
-        storage: StorageDep
+        session: SessionDep,
+        _admin: AdminRoleDep,
 ):
-    if not storage.get(product_id):
-        raise HTTPException(
-            status_code=HTTP_404_NOT_FOUND,
-            detail="Товар не найден",
-        )
+    for field, value in product_data.model_dump(mode="json").items():
+        setattr(product, field, value)
 
-    product = ProductRead(id=product_id, **product_data.model_dump())
-    storage.create(product)
-
+    session.commit()
+    session.refresh(product)
     return product
 
 
