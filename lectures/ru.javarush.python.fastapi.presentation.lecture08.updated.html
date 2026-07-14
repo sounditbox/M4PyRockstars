@@ -1,0 +1,649 @@
+<!doctype html>
+<html lang="ru" class="light">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link href="https://super-dev-styles.github.io/website-assets/styles.css" rel="stylesheet">
+  <link href="https://super-dev-styles.github.io/website-assets/view.css" rel="stylesheet">
+  <link href="https://super-dev-styles.github.io/website-assets/slides.css" rel="stylesheet">
+  <script src="https://super-dev-styles.github.io/website-assets/slides.js" defer></script>
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism.min.css" rel="stylesheet">
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/plugins/line-numbers/prism-line-numbers.min.css" rel="stylesheet">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-core.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/plugins/autoloader/prism-autoloader.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/plugins/line-numbers/prism-line-numbers.min.js"></script>
+  <title>Лекция 8: Alembic в FastAPI — миграции схемы базы данных</title>
+</head>
+<body>
+<div class="content lecture-content post-content">
+  <db-content>
+    <h1>Лекция 8: Alembic в FastAPI — миграции схемы базы данных</h1>
+<p>В прошлой лекции мы подключили SQLAlchemy 2.0, описали ORM-модель <code>Product</code> и научили FastAPI работать с базой через одну <code>Session</code> на запрос.</p>
+    <p>Теперь сделаем следующий шаг: база данных получает историю изменений. Таблицы больше не появляются магически при старте приложения — их создаёт и обновляет отдельный управляемый процесс миграций.</p>
+    <hr>
+
+    <h2>Перед Alembic: подключаем PostgreSQL</h2>
+<p>Alembic будет подключаться к той же базе, что и приложение. Поэтому сначала разберём PostgreSQL-подключение.</p>
+    <table>
+      <thead>
+      <tr>
+        <th>Что нужно</th>
+        <th>Пример</th>
+      </tr>
+      </thead>
+      <tbody>
+      <tr>
+        <td>запущенный PostgreSQL</td>
+        <td>локально, в Docker или в облаке</td>
+      </tr>
+      <tr>
+        <td>Python-драйвер</td>
+        <td><code>psycopg</code></td>
+      </tr>
+      <tr>
+        <td>URL подключения</td>
+        <td><code>postgresql+psycopg://...</code></td>
+      </tr>
+      </tbody>
+    </table>
+    <hr>
+
+    <h2>Устанавливаем PostgreSQL-драйвер</h2>
+    <pre class="language-bash"><code>uv add "psycopg[binary]"
+</code></pre>
+    <p>Для SQLite отдельный пакет не нужен: драйвер входит в стандартную библиотеку Python. Для PostgreSQL ставим внешний DBAPI-драйвер, через который SQLAlchemy будет отправлять SQL в базу.</p>
+    <hr>
+
+    <h2>DATABASE_URL для PostgreSQL</h2>
+    <pre><code># .env
+DATABASE_URL=postgresql+psycopg://postgres:postgres@localhost:5432/products
+</code></pre>
+    <table>
+      <thead>
+      <tr>
+        <th>Часть URL</th>
+        <th>Смысл</th>
+      </tr>
+      </thead>
+      <tbody>
+      <tr>
+        <td><code>postgresql+psycopg</code></td>
+        <td>диалект SQLAlchemy + драйвер</td>
+      </tr>
+      <tr>
+        <td><code>postgres:postgres</code></td>
+        <td>пользователь и пароль</td>
+      </tr>
+      <tr>
+        <td><code>localhost:5432</code></td>
+        <td>адрес и порт PostgreSQL</td>
+      </tr>
+      <tr>
+        <td><code>products</code></td>
+        <td>имя базы данных</td>
+      </tr>
+      </tbody>
+    </table>
+    <p>Код приложения менять не нужно: <code>Settings.database_url</code> отдаст новый URL в фабрику Engine.</p>
+    <hr>
+
+    <h2>Что такое миграция</h2>
+    <p><b>Миграция</b> — это файл с Python-кодом, который переводит схему базы из одного состояния в другое.</p>
+    <pre><code>base
+  ↓
+001_create_products_table
+  ↓
+002_add_stock_count
+  ↓
+003_create_categories_table
+  ↓
+head
+</code></pre>
+    <p>Каждый шаг знает, как двигаться вперёд через <code>upgrade()</code>. Если откаты нужны проекту, тот же файл описывает обратное движение через <code>downgrade()</code>.</p>
+    <hr>
+
+    <h2>Что такое Alembic</h2>
+    <p><b>Alembic</b> — официальный инструмент миграций для проектов на SQLAlchemy.</p>
+    <ul>
+      <li>читает текущую схему базы данных.</li>
+      <li>читает <code>Base.metadata</code> из ORM-моделей.</li>
+      <li>умеет сгенерировать кандидат миграции через <code>--autogenerate</code>.</li>
+      <li>применяет миграции в правильном порядке.</li>
+      <li>хранит текущую ревизию базы в таблице <code>alembic_version</code>.</li>
+    </ul>
+    <hr>
+
+    <h2>Главная идея Alembic</h2>
+    <pre><code>ORM-модели описывают желаемую схему
+        ↓
+Alembic сравнивает metadata и реальную базу
+        ↓
+создаётся revision-файл
+        ↓
+разработчик проверяет файл руками
+        ↓
+alembic upgrade head применяет изменения
+</code></pre>
+    <p>Ключевой момент — «проверяет руками». Autogenerate экономит время, но не заменяет мышление разработчика. Маленький робот-черновик, не архитектор.</p>
+    <hr>
+
+    <h2>Команды Alembic</h2>
+    <table>
+      <thead>
+      <tr>
+        <th>Команда</th>
+        <th>Зачем нужна</th>
+      </tr>
+      </thead>
+      <tbody>
+      <tr>
+        <td><code>alembic init alembic</code></td>
+        <td>один раз создать папку миграций</td>
+      </tr>
+      <tr>
+        <td><code>alembic revision --autogenerate -m "message"</code></td>
+        <td>создать черновик миграции по моделям</td>
+      </tr>
+      <tr>
+        <td><code>alembic upgrade head</code></td>
+        <td>применить миграции до последней версии</td>
+      </tr>
+      <tr>
+        <td><code>alembic downgrade -1</code></td>
+        <td>откатить одну миграцию назад</td>
+      </tr>
+      <tr>
+        <td><code>alembic current</code></td>
+        <td>посмотреть ревизию текущей базы</td>
+      </tr>
+      <tr>
+        <td><code>alembic check</code></td>
+        <td>проверить, не забыли ли миграцию</td>
+      </tr>
+      </tbody>
+    </table>
+    <hr>
+
+    <h2>Установка и init</h2>
+    <pre class="language-bash"><code>uv add alembic
+alembic init alembic
+</code></pre>
+    <p><code>init</code> создаёт <code>alembic.ini</code>, <code>alembic/env.py</code> и папку <code>alembic/versions/</code>. Эти файлы коммитятся в проект.</p>
+    <hr>
+
+    <h2>Настраиваем alembic.ini</h2>
+    <p><b><code>alembic.ini</code></b></p>
+    <pre><code>[alembic]
+script_location = %(here)s/alembic
+prepend_sys_path = .
+path_separator = os
+
+# sqlalchemy.url здесь не задаём:
+# реальный URL env.py возьмёт из Settings.
+</code></pre>
+    <p>Это работает потому, что ниже мы меняем <code>env.py</code>: если URL не задан в <code>alembic.ini</code>, Alembic берёт <code>Settings.database_url</code>.</p>
+    <hr>
+
+    <h2>Полный env.py</h2>
+    <p><b><code>alembic/env.py</code></b></p>
+    <pre class="language-python"><code>from logging.config import fileConfig
+
+from alembic import context
+from sqlalchemy import engine_from_config, pool
+
+from app.core.config import get_settings
+from app.models import Base
+
+
+config = context.config
+
+if config.config_file_name is not None:
+    fileConfig(config.config_file_name)
+
+target_metadata = Base.metadata
+
+
+def get_database_url() -&gt; str:
+    configured_url = config.get_main_option("sqlalchemy.url")
+    if configured_url:
+        return configured_url
+    return get_settings().database_url
+
+
+def get_alembic_section(database_url: str) -&gt; dict[str, str]:
+    section = config.get_section(
+        config.config_ini_section, {}
+    )
+    section["sqlalchemy.url"] = database_url
+    return section
+
+
+def is_sqlite(database_url: str) -&gt; bool:
+    return database_url.startswith("sqlite")
+
+
+def run_migrations_offline() -&gt; None:
+    database_url = get_database_url()
+    context.configure(
+        url=database_url,
+        target_metadata=target_metadata,
+        literal_binds=True,
+        dialect_opts={"paramstyle": "named"},
+        compare_type=True,
+        render_as_batch=is_sqlite(database_url),
+    )
+
+    with context.begin_transaction():
+        context.run_migrations()
+
+
+def run_migrations_online() -&gt; None:
+    database_url = get_database_url()
+    connectable = engine_from_config(
+        get_alembic_section(database_url),
+        prefix="sqlalchemy.",
+        poolclass=pool.NullPool,
+    )
+
+    try:
+        with connectable.connect() as connection:
+            context.configure(
+                connection=connection,
+                target_metadata=target_metadata,
+                compare_type=True,
+                render_as_batch=is_sqlite(database_url),
+            )
+
+            with context.begin_transaction():
+                context.run_migrations()
+    finally:
+        connectable.dispose()
+
+
+if context.is_offline_mode():
+    run_migrations_offline()
+else:
+    run_migrations_online()
+</code></pre>
+    <p><code>target_metadata = Base.metadata</code> даёт Alembic схему из ORM-моделей. Если модели разнесены по файлам, импортируйте их до чтения <code>target_metadata</code>.</p>
+    <p><code>compare_type=True</code> учитывает изменения типов, а <code>render_as_batch</code> помогает SQLite с изменением таблиц.</p>
+    <hr>
+
+    <h2>Naming convention для ограничений</h2>
+<p><code>naming_convention</code> даёт предсказуемые имена primary key, foreign key, unique, check и index. Alembic проще изменить или удалить constraint, если его имя не зависит от конкретной СУБД.</p>
+    <pre><code>pk_products
+ix_products_name
+fk_products_category_id_categories
+</code></pre>
+    <hr>
+
+    <h2>Обновляем Base</h2>
+    <p><b><code>app/models.py</code></b></p>
+    <pre class="language-python"><code>from sqlalchemy import MetaData
+from sqlalchemy.orm import DeclarativeBase
+
+
+naming_convention = {
+    "ix": "ix_%(column_0_label)s",
+    "uq": "uq_%(table_name)s_%(column_0_name)s",
+    "ck": "ck_%(table_name)s_%(column_0_name)s",
+    "fk": (
+        "fk_%(table_name)s_%(column_0_name)s_"
+        "%(referred_table_name)s"
+    ),
+    "pk": "pk_%(table_name)s",
+}
+
+
+class Base(DeclarativeBase):
+    metadata = MetaData(naming_convention=naming_convention)
+</code></pre>
+    <p>Добавляйте convention до первой миграции. Если поменять имена ограничений позже, Alembic может увидеть это как изменение схемы и сгенерировать лишние операции.</p>
+    <hr>
+
+    <h2>Убираем create_all из lifespan</h2>
+<p><b><code>app/lifespan.py</code></b></p>
+    <pre class="language-python"><code>from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+
+from fastapi import FastAPI
+
+from app.database import (
+    create_database_engine,
+    create_session_factory,
+)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI) -&gt; AsyncIterator[None]:
+    settings = app.state.settings
+    engine = create_database_engine(settings.database_url)
+    session_factory = create_session_factory(engine)
+
+    app.state.engine = engine
+    app.state.session_factory = session_factory
+
+    try:
+        yield
+    finally:
+        engine.dispose()
+</code></pre>
+    <p>Если база не мигрирована, запросы честно упадут с ошибкой уровня базы. Это лучше, чем тихо менять схему при каждом запуске API.</p>
+    <hr>
+
+    <h2>Создаём первую миграцию</h2>
+    <pre class="language-bash"><code>alembic revision --autogenerate -m "create products table"
+</code></pre>
+    <p>Alembic сравнит пустую базу и <code>Base.metadata</code>, увидит таблицу <code>products</code> и создаст новый файл в <code>alembic/versions/</code>.</p>
+    <pre><code>alembic/versions/
+└── 7f4c2e9a1b01_create_products_table.py
+</code></pre>
+    <p>Имя и revision id будут другими на вашей машине. Это нормально: важна цепочка через <code>down_revision</code>.</p>
+    <hr>
+
+    <h2>Что autogenerate сравнивает</h2>
+    <table>
+      <thead>
+      <tr>
+        <th>Обычно видит</th>
+        <th>Требует внимания</th>
+      </tr>
+      </thead>
+      <tbody>
+      <tr>
+        <td>добавление и удаление таблиц</td>
+        <td>переименование таблицы может выглядеть как drop + create</td>
+      </tr>
+      <tr>
+        <td>добавление и удаление столбцов</td>
+        <td>переименование столбца может выглядеть как drop + add</td>
+      </tr>
+      <tr>
+        <td>изменение <code>nullable</code></td>
+        <td>существующие данные могут нарушить новое ограничение</td>
+      </tr>
+      <tr>
+        <td>часть индексов, unique и foreign key</td>
+        <td>безымянные constraints сложно менять</td>
+      </tr>
+      <tr>
+        <td>изменение типа при <code>compare_type=True</code></td>
+        <td>сложные преобразования данных нужно писать вручную</td>
+      </tr>
+      </tbody>
+    </table>
+    <p>Autogenerate создаёт кандидата миграции. Перед применением читаем файл полностью.</p>
+    <hr>
+
+    <h2>Как исправить переименование</h2>
+<p>Если вы переименовали поле модели, Alembic может сгенерировать опасный черновик: <code>drop_column("name")</code> и <code>add_column("title")</code>. Это удалит данные из старого столбца.</p>
+    <p>Такой черновик правим руками на rename-операцию:</p>
+    <pre class="language-python"><code>def upgrade() -&gt; None:
+    op.alter_column(
+        "products",
+        "name",
+        new_column_name="title",
+        existing_type=sa.String(length=80),
+        existing_nullable=False,
+    )
+
+
+def downgrade() -&gt; None:
+    op.alter_column(
+        "products",
+        "title",
+        new_column_name="name",
+        existing_type=sa.String(length=80),
+        existing_nullable=False,
+    )
+</code></pre>
+    <p>Для таблицы используется <code>op.rename_table("old_name", "new_name")</code>. Правило простое: переименование не должно выглядеть как удаление и создание заново.</p>
+    <hr>
+
+    <h2>Читаем файл ревизии</h2>
+    <p>Каждый revision-файл содержит метаданные и две функции:</p>
+    <table>
+      <thead>
+      <tr>
+        <th>Часть</th>
+        <th>Что означает</th>
+      </tr>
+      </thead>
+      <tbody>
+      <tr>
+        <td><code>revision</code></td>
+        <td>id текущей миграции</td>
+      </tr>
+      <tr>
+        <td><code>down_revision</code></td>
+        <td>предыдущая миграция или <code>None</code> для первой</td>
+      </tr>
+      <tr>
+        <td><code>upgrade()</code></td>
+        <td>изменения при движении вперёд</td>
+      </tr>
+      <tr>
+        <td><code>downgrade()</code></td>
+        <td>изменения при откате назад</td>
+      </tr>
+      </tbody>
+    </table>
+    <p>Alembic применяет не «все файлы подряд по имени», а граф ревизий через <code>down_revision</code>.</p>
+    <hr>
+
+    <h2>Применяем миграцию</h2>
+    <pre class="language-bash"><code>alembic upgrade head
+</code></pre>
+    <p><code>head</code> означает «последняя доступная миграция». Для чистой SQLite-базы команда создаст таблицу <code>products</code>, индексы и служебную таблицу <code>alembic_version</code>.</p>
+    <pre><code>INFO  [alembic.runtime.migration] Running upgrade  -> 7f4c2e9a1b01, create products table
+</code></pre>
+    <p>После этого FastAPI-приложение может стартовать без <code>create_all()</code>: схема уже подготовлена.</p>
+    <hr>
+
+    <h2>Что такое alembic_version</h2>
+    <p>Alembic хранит текущую ревизию базы в отдельной таблице:</p>
+    <pre><code>alembic_version
+┌────────────────┐
+│ version_num    │
+├────────────────┤
+│ 7f4c2e9a1b01   │
+└────────────────┘
+</code></pre>
+    <p>Когда вы запускаете <code>upgrade head</code>, Alembic смотрит на эту таблицу, понимает текущую точку и применяет только недостающие миграции.</p>
+    <p>Это важнее, чем дата файла или порядок в папке. Истина — revision graph и <code>alembic_version</code>.</p>
+    <hr>
+
+    <h2>Второе изменение модели</h2>
+    <p>Добавим запас товара на складе. Сначала меняется ORM-модель:</p>
+    <p><b><code>app/models.py</code></b></p>
+    <pre class="language-python"><code>class Product(Base):
+    __tablename__ = "products"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(80), index=True)
+    category: Mapped[str] = mapped_column(String(40), index=True)
+    price: Mapped[Decimal] = mapped_column(Numeric(12, 2))
+    sale_price: Mapped[Decimal | None] = mapped_column(
+        Numeric(12, 2), nullable=True
+    )
+    description: Mapped[str | None] = mapped_column(
+        String(500), nullable=True
+    )
+    is_available: Mapped[bool] = mapped_column(Boolean, default=True)
+    stock_count: Mapped[int] = mapped_column(default=0)
+    specs: Mapped[dict[str, object] | None] = mapped_column(
+        JSON, nullable=True
+    )
+</code></pre>
+    <p>После изменения модели база сама не меняется. Нужна новая миграция.</p>
+    <hr>
+
+    <h2>Генерируем вторую миграцию</h2>
+    <pre class="language-bash"><code>alembic revision --autogenerate -m "add product stock count"
+</code></pre>
+    <p>Ожидаемый черновик может выглядеть так:</p>
+    <pre class="language-python"><code>def upgrade() -&gt; None:
+    op.add_column(
+        "products",
+        sa.Column("stock_count", sa.Integer(), nullable=False),
+    )
+
+
+def downgrade() -&gt; None:
+    op.drop_column("products", "stock_count")
+</code></pre>
+    <p>На пустой базе это может пройти. На базе с существующими товарами — нет, потому что для старых строк неизвестно значение <code>stock_count</code>.</p>
+    <hr>
+
+    <h2>Ловушка NOT NULL-колонки</h2>
+<pre><code>products
+┌────┬──────────┐
+│ id │ name     │
+├────┼──────────┤
+│ 1  │ Keyboard │
+│ 2  │ Mouse    │
+└────┴──────────┘
+
+ALTER TABLE products
+ADD COLUMN stock_count INTEGER NOT NULL
+
+Что поставить в stock_count для старых строк?
+</code></pre>
+    <p>ORM-параметр <code>default=0</code> помогает при новых INSERT через SQLAlchemy, но не всегда означает, что база сможет заполнить старые строки во время миграции.</p>
+    <hr>
+
+    <h2>Безопасная миграция для stock_count</h2>
+    <p>Один из простых вариантов — добавить временный server default, а затем убрать его:</p>
+    <pre class="language-python"><code>def upgrade() -&gt; None:
+    op.add_column(
+        "products",
+        sa.Column(
+            "stock_count",
+            sa.Integer(),
+            nullable=False,
+            server_default="0",
+        ),
+    )
+    op.alter_column(
+        "products",
+        "stock_count",
+        server_default=None,
+    )
+
+
+def downgrade() -&gt; None:
+    op.drop_column("products", "stock_count")
+</code></pre>
+    <p>Так существующие строки получают <code>0</code>, а новые значения дальше контролирует приложение. В более сложных случаях делают миграцию в несколько шагов: добавить nullable-колонку, заполнить данные, потом включить NOT NULL.</p>
+    <hr>
+
+    <h2>Фикстура с Alembic</h2>
+<p>В тестах запускаем миграции на отдельном SQLite-файле из <code>tmp_path</code>, а потом создаём приложение с тем же <code>database_url</code>.</p>
+    <p><b><code>tests/conftest.py</code></b></p>
+    <pre class="language-python"><code>from pathlib import Path
+
+import pytest
+from alembic import command
+from alembic.config import Config
+from fastapi import FastAPI
+
+from app.core.config import Settings, get_settings
+from app.main import create_app
+
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
+
+def run_migrations(database_url: str) -&gt; None:
+    alembic_config = Config(str(PROJECT_ROOT / "alembic.ini"))
+    alembic_config.set_main_option(
+        "sqlalchemy.url",
+        database_url.replace("%", "%%"),
+    )
+    command.upgrade(alembic_config, "head")
+
+
+@pytest.fixture
+def app(tmp_path: Path) -&gt; FastAPI:
+    database_path = tmp_path / "test.db"
+    settings = Settings(
+        app_name="Products API Test",
+        api_prefix="/api/v1",
+        database_url=f"sqlite+pysqlite:///{database_path.as_posix()}",
+        jwt_secret_key="test-secret-not-for-production",
+    )
+
+    run_migrations(settings.database_url)
+
+    application = create_app(settings)
+    application.dependency_overrides[get_settings] = lambda: settings
+    return application
+</code></pre>
+    <p><code>set_main_option()</code> передаёт тестовый URL в <code>env.py</code>. Замена <code>%</code> на <code>%%</code> нужна из-за особенностей configparser.</p>
+    <hr>
+
+    <h2>Минимальный workflow</h2>
+    <pre><code>1. Меняем ORM-модель
+2. alembic revision --autogenerate -m "..."
+3. Читаем и правим migration-файл
+4. alembic upgrade head
+5. alembic check
+6. pytest
+7. Коммитим код модели и migration-файл вместе
+</code></pre>
+    <p>Модель без миграции — половина изменения. Миграция без модели — тоже половина. Обычно они живут в одном коммите.</p>
+    <hr>
+
+    <h2>Практика</h2>
+    <p>Задача: перевести проект с <code>create_all()</code> на управляемые Alembic-миграции.</p>
+    <ol>
+      <li>Установите Alembic через <code>uv add alembic</code>.</li>
+      <li>Инициализируйте Alembic-среду командой <code>alembic init alembic</code>.</li>
+      <li>Очистите <code>sqlalchemy.url</code> в <code>alembic.ini</code> или настройте его так, чтобы URL не дублировался с <code>Settings</code>.</li>
+      <li>В <code>app/models.py</code> добавьте <code>naming_convention</code> в <code>Base.metadata</code>.</li>
+      <li>Настройте <code>alembic/env.py</code>: импортируйте <code>Base</code>, передайте <code>target_metadata</code>, включите <code>compare_type=True</code> и <code>render_as_batch</code> для SQLite.</li>
+      <li>Удалите <code>Base.metadata.create_all(bind=engine)</code> из lifespan.</li>
+      <li>Создайте первую миграцию <code>create products table</code> через <code>--autogenerate</code>.</li>
+      <li>Проверьте migration-файл руками: таблица, индексы, nullable, downgrade.</li>
+      <li>Примените миграции командой <code>alembic upgrade head</code>.</li>
+      <li>Переведите тестовую фикстуру на запуск Alembic-миграций в SQLite-файле из <code>tmp_path</code>.</li>
+      <li>Добавьте поле <code>stock_count</code>, создайте вторую миграцию и обработайте NOT NULL для существующих строк.</li>
+      <li>Проверьте <code>alembic check</code> и весь набор тестов.</li>
+    </ol>
+    <p>Дополнительная задача: проверьте откат второй миграции через <code>downgrade -1</code>, затем снова примените <code>upgrade head</code>.</p>
+    <hr>
+
+    <h2>Итоги</h2>
+    <p>На этой лекции мы научились:</p>
+    <ul>
+      <li>понимать, почему <code>create_all()</code> не заменяет миграции.</li>
+      <li>создавать Alembic-среду и подключать её к FastAPI-проекту.</li>
+      <li>использовать <code>Base.metadata</code> как источник желаемой схемы.</li>
+      <li>задавать <code>naming_convention</code> для стабильных constraint-имён.</li>
+      <li>создавать, читать и применять revision-файлы.</li>
+      <li>понимать ограничения autogenerate.</li>
+      <li>безопаснее добавлять NOT NULL-колонки к таблицам с данными.</li>
+      <li>учитывать особенности SQLite через batch mode.</li>
+      <li>запускать реальные миграции в тестах.</li>
+      <li>проверять schema drift через <code>alembic check</code>.</li>
+    </ul>
+    <p>На следующей лекции добавим связи между таблицами: <code>ForeignKey</code>, <code>relationship()</code>, категории товаров и загрузку связанных данных без случайного N+1.</p>
+    <hr>
+
+    <h2>Официальные материалы</h2>
+    <ul>
+      <li><a href="https://alembic.sqlalchemy.org/en/latest/tutorial.html">Alembic: Tutorial</a></li>
+      <li><a href="https://alembic.sqlalchemy.org/en/latest/autogenerate.html">Alembic: Auto Generating Migrations</a></li>
+      <li><a href="https://alembic.sqlalchemy.org/en/latest/ops.html">Alembic: Operation Reference</a></li>
+      <li><a href="https://alembic.sqlalchemy.org/en/latest/batch.html">Alembic: Running “Batch” Migrations for SQLite and Other Databases</a></li>
+      <li><a href="https://alembic.sqlalchemy.org/en/latest/naming.html">Alembic: The Importance of Naming Constraints</a></li>
+      <li><a href="https://docs.sqlalchemy.org/en/20/core/constraints.html#configuring-constraint-naming-conventions">SQLAlchemy 2.0: Configuring Constraint Naming Conventions</a></li>
+    </ul>
+    <hr>
+  </db-content>
+  <footer class="site-footer">
+    <div class="footer-logo-link"></div>
+  </footer>
+</div>
+</body>
+</html>
