@@ -1,4 +1,34 @@
 import pytest
+from fastapi.testclient import TestClient
+from pydantic import SecretStr
+
+
+def test_app_has_no_default_users(app):
+    with TestClient(app) as unseeded_client:
+        response = unseeded_client.post(
+            "/api/v1/auth/token",
+            data={"username": "admin", "password": "admin"},
+        )
+
+    assert response.status_code == 401
+
+
+def test_configured_bootstrap_admin_can_login(app):
+    app.state.settings.admin_username = "configured-admin"
+    app.state.settings.admin_password = SecretStr(
+        "configured-admin-password"
+    )
+
+    with TestClient(app) as configured_client:
+        response = configured_client.post(
+            "/api/v1/auth/token",
+            data={
+                "username": "configured-admin",
+                "password": "configured-admin-password",
+            },
+        )
+
+    assert response.status_code == 200
 
 
 def test_login_returns_bearer_token(client):
@@ -81,9 +111,10 @@ def test_regular_user_cannot_create_product(client):
         "/api/v1/products",
         headers={"Authorization": f"Bearer {token}"},
         json={
-            "name": "Gaming Mouse",
+            "title": "Gaming Mouse",
             "category": "electronics",
             "price": 49.90,
+            "stock_count": 42,
         },
     )
 

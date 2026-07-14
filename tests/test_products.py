@@ -21,16 +21,17 @@ def test_create_product(admin_client):
     response = admin_client.post(
         "/api/v1/products",
         json={
-            "name": "Mechanical Keyboard",
+            "title": "Mechanical Keyboard",
             "category": "electronics",
             "price": 129.90,
+            'stock_count': 42,
         },
     )
 
     assert response.status_code == 201
     body = response.json()
     assert body["id"] == 1
-    assert body["name"] == "Mechanical Keyboard"
+    assert body["title"] == "Mechanical Keyboard"
     assert body["category"] == "electronics"
     assert body["price"] == 129.90
 
@@ -39,9 +40,11 @@ def test_created_product_appears_in_list(admin_client):
     create_response = admin_client.post(
         "/api/v1/products",
         json={
-            "name": "Gaming Mouse",
+            "title": "Gaming Mouse",
             "category": "electronics",
             "price": 49.90,
+            'stock_count': 42
+
         },
     )
     product = create_response.json()
@@ -52,13 +55,38 @@ def test_created_product_appears_in_list(admin_client):
     assert list_response.json() == [product]
 
 
+def test_search_products_by_title(admin_client):
+    for title in ("Gaming Mouse", "Mechanical Keyboard"):
+        response = admin_client.post(
+            "/api/v1/products",
+            json={
+                "title": title,
+                "category": "electronics",
+                "price": 49.90,
+                "stock_count": 42,
+            },
+        )
+        assert response.status_code == 201
+
+    response = admin_client.get(
+        "/api/v1/products",
+        params={"search": "keyboard"},
+    )
+
+    assert response.status_code == 200
+    assert [product["title"] for product in response.json()] == [
+        "Mechanical Keyboard"
+    ]
+
+
 def test_product_lifecycle(admin_client):
     created = admin_client.post(
         "/api/v1/products",
         json={
-            "name": "Gaming Mouse",
+            "title": "Gaming Mouse",
             "category": "electronics",
             "price": 49.90,
+            'stock_count': 42
         },
     )
     product_id = created.json()["id"]
@@ -87,9 +115,10 @@ def test_replace_product(admin_client):
     created = admin_client.post(
         "/api/v1/products",
         json={
-            "name": "Gaming Mouse",
+            "title": "Gaming Mouse",
             "category": "electronics",
             "price": 49.90,
+            'stock_count': 42
         },
     )
     product_id = created.json()["id"]
@@ -97,33 +126,88 @@ def test_replace_product(admin_client):
     replaced = admin_client.put(
         f"/api/v1/products/{product_id}",
         json={
-            "name": "Mechanical Keyboard",
+            "title": "Mechanical Keyboard",
             "category": "electronics",
             "price": 129.90,
             "is_available": False,
+            'stock_count': 42
+
         },
     )
 
     assert replaced.status_code == 200
     body = replaced.json()
     assert body["id"] == product_id
-    assert body["name"] == "Mechanical Keyboard"
+    assert body["title"] == "Mechanical Keyboard"
     assert body["category"] == "electronics"
     assert body["price"] == 129.90
     assert body["is_available"] is False
 
 
+def test_patch_product_title_and_stock(admin_client):
+    created = admin_client.post(
+        "/api/v1/products",
+        json={
+            "title": "Gaming Mouse",
+            "category": "electronics",
+            "price": 49.90,
+            "stock_count": 42,
+        },
+    )
+    product_id = created.json()["id"]
+
+    response = admin_client.patch(
+        f"/api/v1/products/{product_id}",
+        json={"title": "Wireless Mouse", "stock_count": 10},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["title"] == "Wireless Mouse"
+    assert response.json()["stock_count"] == 10
+
+
+def test_patch_rejects_obsolete_name_field(admin_client):
+    created = admin_client.post(
+        "/api/v1/products",
+        json={
+            "title": "Gaming Mouse",
+            "category": "electronics",
+            "price": 49.90,
+        },
+    )
+    product_id = created.json()["id"]
+
+    response = admin_client.patch(
+        f"/api/v1/products/{product_id}",
+        json={"name": "Wireless Mouse"},
+    )
+
+    assert response.status_code == 422
+
+
 @pytest.mark.parametrize(
     ("payload", "field"),
     [
-        ({"name": "", "category": "electronics", "price": 10}, "name"),
-        ({"name": "Gaming Mouse", "price": 10}, "category"),
-        ({"name": "Gaming Mouse", "category": "electronics", "price": 0},
+        ({"title": "", "category": "electronics", "price": 10}, "title"),
+        ({"title": "Gaming Mouse", "price": 10}, "category"),
+        ({"title": "Gaming Mouse", "category": "electronics", "price": 0},
          "price"),
-        ({"name": "Gaming Mouse", "category": "electronics", "price": -1},
+        ({"title": "Gaming Mouse", "category": "electronics", "price": -1},
          "price"),
+        ({
+            "title": "Gaming Mouse",
+            "category": "electronics",
+            "price": 10,
+            "stock_count": -1,
+        }, "stock_count"),
     ],
-    ids=["empty-name", "missing-category", "zero-price", "negative-price"],
+    ids=[
+        "empty-title",
+        "missing-category",
+        "zero-price",
+        "negative-price",
+        "negative-stock",
+    ],
 )
 def test_invalid_product_payload(admin_client, payload, field):
     response = admin_client.post("/api/v1/products", json=payload)

@@ -39,7 +39,7 @@ def create_product(
 @router.get("", response_model=list[ProductRead], status_code=200,
             summary="Products endpoint",
             description="Products endpoint description", tags=["Products"])
-async def list_products(
+def list_products(
         session: SessionDep,
         search: SearchParam = None,
         limit: LimitParam = 10,
@@ -48,7 +48,7 @@ async def list_products(
 ) -> list[ProductRead]:
     statement = select(Product).order_by(Product.id)
     if search:
-        statement = statement.filter(Product.name.ilike(f"%{search}%"))
+        statement = statement.filter(Product.title.ilike(f"%{search}%"))
     statement = statement.filter(Product.is_available == only_available)
     if category:
         statement = statement.filter(Product.category == category)

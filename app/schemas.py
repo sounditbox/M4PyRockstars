@@ -10,6 +10,7 @@ CategoryName = Annotated[
     str, Field(min_length=2, max_length=40, pattern=r"^[a-zA-Z0-9-]+$"),
 ]
 PositivePrice = Annotated[float, Field(gt=0, le=1_000_000)]
+StockCount = Annotated[int, Field(ge=0)]
 Tag = Annotated[str, Field(min_length=2, max_length=30)]
 
 
@@ -20,17 +21,18 @@ class ProductSpecs(BaseModel):
 
 
 class ProductBase(BaseModel):
-    name: ProductName
+    title: ProductName
     category: CategoryName
     price: PositivePrice
     description: str | None = Field(default=None, max_length=500)
     is_available: bool = True
     specs: ProductSpecs | None = None
     sale_price: PositivePrice | None = None
+    stock_count: StockCount = 0
 
-    @field_validator("name")
+    @field_validator("title")
     @classmethod
-    def normalize_name(cls, value: str) -> str:
+    def normalize_title(cls, value: str) -> str:
         normalized = " ".join(value.split())
 
         if normalized.lower() in {"test", "product", "товар"}:
@@ -55,11 +57,19 @@ class ProductCreate(ProductBase):
 
 
 class ProductUpdate(BaseModel):
-    name: ProductName | None = None
+    title: ProductName | None = None
     category: CategoryName | None = None
     price: PositivePrice | None = None
     description: str | None = Field(default=None, max_length=500)
     is_available: bool | None = None
+    specs: ProductSpecs | None = None
+    sale_price: PositivePrice | None = None
+    stock_count: StockCount | None = None
+
+    model_config = ConfigDict(
+        extra="forbid",
+        str_strip_whitespace=True,
+    )
 
 
 class ProductRead(ProductBase):
