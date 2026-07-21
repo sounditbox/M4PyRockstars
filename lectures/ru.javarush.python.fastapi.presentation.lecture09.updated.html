@@ -1,0 +1,865 @@
+<!doctype html>
+<html lang="ru" class="light">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link href="https://super-dev-styles.github.io/website-assets/styles.css" rel="stylesheet">
+  <link href="https://super-dev-styles.github.io/website-assets/view.css" rel="stylesheet">
+  <link href="https://super-dev-styles.github.io/website-assets/slides.css" rel="stylesheet">
+  <script src="https://super-dev-styles.github.io/website-assets/slides.js" defer></script>
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism.min.css" rel="stylesheet">
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/plugins/line-numbers/prism-line-numbers.min.css" rel="stylesheet">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-core.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/plugins/autoloader/prism-autoloader.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/plugins/line-numbers/prism-line-numbers.min.js"></script>
+  <title>Лекция 9: Связи таблиц в SQLAlchemy — ForeignKey, relationship и N+1</title>
+</head>
+<body>
+<div class="content lecture-content post-content">
+  <db-content>
+    <h1>Лекция 9: Связи таблиц в SQLAlchemy — ForeignKey, relationship и N+1</h1>
+    <p>В прошлой лекции мы подключили проект к PostgreSQL через <code>psycopg</code> и передали изменение схемы базы Alembic-миграциям. Теперь сделаем следующий шаг: перестанем хранить категорию товара строкой внутри <code>products</code> и вынесем категории в отдельную таблицу.</p>
+    <p>На этой лекции разберём связи между таблицами, перенесём существующие категории и научимся загружать связанные объекты без проблемы N+1.</p>
+    <hr>
+
+    <h2>Связь 1-to-n и n-to-1</h2>
+    <pre><code>Категория (1) ───────── Товары (n)
+
+1-to-n: одна категория содержит много товаров
+n-to-1: много товаров ссылаются на одну категорию
+</code></pre>
+    <p><code>ForeignKey</code> хранит связь в PostgreSQL: <code>products.category_id → categories.id</code>. Он находится на стороне <code>n</code> и не позволяет сослаться на несуществующую категорию.</p>
+    <p><code>relationship()</code> даёт удобные Python-атрибуты для той же связи: <code>product.category</code> в направлении <code>n-to-1</code> и <code>category.products</code> в направлении <code>1-to-n</code>.</p>
+    <hr>
+
+    <h2>Обновляем ORM-модели</h2>
+    <p><b><code>app/models.py</code></b></p>
+    <pre class="language-python"><code>from __future__ import annotations
+
+from decimal import Decimal
+
+from sqlalchemy import (
+    Boolean,
+    CheckConstraint,
+    ForeignKey,
+    Integer,
+    JSON,
+    Numeric,
+    String,
+)
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+
+
+class Category(Base):
+    __tablename__ = "categories"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(
+        String(80), unique=True, index=True
+    )
+    slug: Mapped[str] = mapped_column(
+        String(40), unique=True, index=True
+    )
+
+    products: Mapped[list[Product]] = relationship(
+        back_populates="category"
+    )
+
+
+class Product(Base):
+    __tablename__ = "products"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    title: Mapped[str] = mapped_column(String(80), index=True)
+    category_id: Mapped[int] = mapped_column(
+        ForeignKey("categories.id"),
+        index=True,
+    )
+    price: Mapped[Decimal] = mapped_column(Numeric(12, 2))
+    sale_price: Mapped[Decimal | None] = mapped_column(
+        Numeric(12, 2), nullable=True
+    )
+    description: Mapped[str | None] = mapped_column(
+        String(500), nullable=True
+    )
+    is_available: Mapped[bool] = mapped_column(
+        Boolean, default=True
+    )
+    stock_count: Mapped[int] = mapped_column(
+        Integer,
+        CheckConstraint(
+            "stock_count &gt;= 0",
+            name="ck_products_stock_count_nonnegative",
+        ),
+        default=0,
+        server_default="0",
+    )
+    specs: Mapped[dict[str, object] | None] = mapped_column(
+        JSON, nullable=True
+    )
+
+    category: Mapped[Category] = relationship(
+        back_populates="products"
+    )
+</code></pre>
+    <p><code>from __future__ import annotations</code> позволяет ссылаться на <code>Product</code> и <code>Category</code> в типах до того, как оба класса полностью объявлены.</p>
+    <hr>
+
+    <h2>Что значит back_populates</h2>
+    <pre><code>Category.products  ◄──── back_populates ────►  Product.category
+</code></pre>
+    <p><code>back_populates</code> связывает две стороны одного отношения. SQLAlchemy понимает, что если <code>product.category = category</code>, то этот товар относится к коллекции <code>category.products</code>.</p>
+    <pre class="language-python"><code>category = Category(name="Electronics", slug="electronics")
+product = Product(title="Keyboard", price=120, category=category)
+
+assert product.category is category
+assert product in category.products
+</code></pre>
+    <p>Это синхронизация ORM-объектов в памяти. Финальная проверка целостности всё равно происходит в базе через <code>ForeignKey</code>.</p>
+    <hr>
+
+    <h2>Миграция с существующими данными</h2>
+    <p>Сначала доводим PostgreSQL-базу до текущего <code>head</code>, затем создаём следующую ревизию поверх уже существующей цепочки миграций:</p>
+    <pre class="language-bash"><code>alembic upgrade head
+alembic revision --autogenerate -m "create product categories"
+</code></pre>
+    <pre><code>1. Создать таблицу categories
+2. Добавить products.category_id как nullable
+3. Перенести уникальные строки products.category в categories
+4. Заполнить products.category_id
+5. Сделать category_id NOT NULL
+6. Удалить старую колонку products.category
+</code></pre>
+    <p>Это не просто изменение схемы, а <b>data migration</b>: миграция должна переложить уже существующие данные в новую форму.</p>
+    <hr>
+
+    <h2>Что такое backfill</h2>
+    <p><b>Backfill</b> — это заполнение нового поля данными из старого формата. Он нужен, потому что в PostgreSQL уже есть товары со строковой категорией.</p>
+    <pre><code>Было:
+products.category = "electronics"
+
+Стало:
+categories: id=1, name="Electronics", slug="electronics"
+products.category_id = 1
+</code></pre>
+    <ol>
+      <li>Берём уникальные значения из <code>products.category</code>.</li>
+      <li>Создаём по ним строки в <code>categories</code>.</li>
+      <li>Записываем полученные ID в <code>products.category_id</code>.</li>
+    </ol>
+    <p>После backfill можно безопасно включить <code>NOT NULL</code> и удалить старую строковую колонку.</p>
+    <hr>
+
+    <h2>Код backfill</h2>
+    <p><b><code>alembic/versions/xxxx_create_product_categories.py</code></b></p>
+    <pre class="language-python"><code>products_table = sa.table(
+    "products",
+    sa.column("category", sa.String),
+    sa.column("category_id", sa.Integer),
+)
+categories_table = sa.table(
+    "categories",
+    sa.column("id", sa.Integer),
+    sa.column("name", sa.String),
+    sa.column("slug", sa.String),
+)
+
+
+def slugify_category(name: str) -&gt; str:
+    return name.strip().lower().replace(" ", "-")
+
+
+def backfill_categories() -&gt; None:
+    connection = op.get_bind()
+
+    category_names = connection.execute(
+        sa.select(products_table.c.category).distinct()
+    ).scalars()
+
+    category_ids: dict[str, int] = {}
+
+    for name in sorted(category_names):
+        category_id = connection.execute(
+            categories_table.insert().values(
+                name=name.title(),
+                slug=slugify_category(name),
+            ).returning(categories_table.c.id)
+        ).scalar_one()
+        category_ids[name] = category_id
+
+    for name, category_id in category_ids.items():
+        connection.execute(
+            products_table.update()
+            .where(products_table.c.category == name)
+            .values(category_id=category_id)
+        )
+</code></pre>
+    <p>Функцию вызываем внутри <code>upgrade()</code>: после добавления nullable-поля <code>category_id</code>, но до включения <code>NOT NULL</code>. PostgreSQL сам генерирует ID, а <code>RETURNING</code> сразу отдаёт его для обновления товаров.</p>
+    <hr>
+
+    <h2>Завершаем миграцию в PostgreSQL</h2>
+    <p>В начале <code>upgrade()</code> остаются созданные autogenerate операции <code>op.create_table("categories", ...)</code> и индексы категории. После них добавляем nullable-колонку и внешний ключ, переносим данные и только потом включаем <code>NOT NULL</code>.</p>
+    <pre class="language-python"><code>op.add_column(
+    "products",
+    sa.Column("category_id", sa.Integer(), nullable=True),
+)
+op.create_index(
+    op.f("ix_products_category_id"),
+    "products",
+    ["category_id"],
+)
+op.create_foreign_key(
+    op.f("fk_products_category_id_categories"),
+    "products",
+    "categories",
+    ["category_id"],
+    ["id"],
+)
+
+backfill_categories()
+
+op.alter_column(
+    "products",
+    "category_id",
+    existing_type=sa.Integer(),
+    nullable=False,
+)
+op.drop_column("products", "category")
+</code></pre>
+    <p>После создания constraint PostgreSQL сам отклонит <code>category_id</code>, которого нет в <code>categories</code>. Дополнительная настройка соединения для проверки внешних ключей не нужна.</p>
+    <hr>
+
+    <h2>Downgrade тоже думает о данных</h2>
+    <p>Откат должен вернуть строковую категорию в <code>products.category</code> до удаления <code>category_id</code> и таблицы <code>categories</code>.</p>
+    <pre><code>downgrade:
+1. Добавить products.category как nullable
+2. Заполнить её из categories.slug или categories.name
+3. Сделать products.category NOT NULL
+4. Удалить foreign key и category_id
+5. Удалить таблицу categories
+</code></pre>
+    <p>Если downgrade теряет важные данные, это нужно явно понимать до релиза. Иногда откат схемы возможен, а откат смысла данных — нет.</p>
+    <hr>
+
+    <h2>Pydantic-схема категории</h2>
+    <p><b><code>app/schemas.py</code></b></p>
+    <pre class="language-python"><code>CategoryId = Annotated[int, Field(gt=0)]
+CategoryTitle = Annotated[
+    str, Field(min_length=2, max_length=80)
+]
+CategorySlug = Annotated[
+    str,
+    Field(min_length=2, max_length=40, pattern=r"^[a-z0-9-]+$"),
+]
+
+
+class CategoryBase(BaseModel):
+    name: CategoryTitle
+    slug: CategorySlug
+
+
+class CategoryCreate(CategoryBase):
+    pass
+
+
+class CategoryRead(CategoryBase):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+</code></pre>
+    <p><code>from_attributes=True</code> позволяет Pydantic читать значения из ORM-объекта <code>Category</code>, а не только из словаря.</p>
+    <hr>
+
+    <h2>Обновляем входные схемы товара</h2>
+    <pre class="language-python"><code>class ProductBase(BaseModel):
+    title: ProductName
+    price: PositivePrice
+    description: str | None = Field(default=None, max_length=500)
+    is_available: bool = True
+    specs: ProductSpecs | None = None
+    sale_price: PositivePrice | None = None
+    stock_count: StockCount = 0
+
+    @field_validator("title")
+    @classmethod
+    def normalize_title(cls, value: str) -&gt; str:
+        normalized = " ".join(value.split())
+        if normalized.lower() in {"test", "product", "товар"}:
+            raise ValueError("Укажите содержательное название товара")
+        return normalized
+
+
+class ProductCreate(ProductBase):
+    category_id: CategoryId
+
+    model_config = ConfigDict(
+        extra="forbid",
+        str_strip_whitespace=True,
+        validate_assignment=True,
+        from_attributes=True,
+    )
+
+    @model_validator(mode="after")
+    def check_sale_price(self) -&gt; Self:
+        if self.sale_price is not None and self.sale_price &gt;= self.price:
+            raise ValueError(
+                "Цена со скидкой должна быть меньше обычной цены"
+            )
+        return self
+
+
+class ProductUpdate(BaseModel):
+    title: ProductName | None = None
+    category_id: CategoryId | None = None
+    price: PositivePrice | None = None
+    description: str | None = Field(default=None, max_length=500)
+    is_available: bool | None = None
+    specs: ProductSpecs | None = None
+    sale_price: PositivePrice | None = None
+    stock_count: StockCount | None = None
+
+    model_config = ConfigDict(
+        extra="forbid",
+        str_strip_whitespace=True,
+    )
+</code></pre>
+    <p>Из существующего <code>ProductBase</code> исчезает строковая <code>category</code>. И создание, и частичное обновление теперь принимают идентификатор связанной категории. Остальные типы и валидаторы проекта сохраняются.</p>
+    <hr>
+
+    <h2>Обновляем схему ответа</h2>
+    <pre class="language-python"><code>class ProductRead(ProductBase):
+    id: int
+    category: CategoryRead
+
+    model_config = ConfigDict(from_attributes=True)
+</code></pre>
+    <p>На входе API получает <code>category_id</code>. В ответе отдаёт вложенный объект <code>category</code>, потому что клиенту обычно нужны не только числа, но и название категории.</p>
+    <hr>
+
+    <h2>Endpoint создания категории</h2>
+    <p><b><code>app/routers/categories.py</code></b></p>
+    <pre class="language-python"><code>from fastapi import APIRouter, HTTPException, status
+from sqlalchemy.exc import IntegrityError
+
+from app.dependencies import SessionDep, get_category_or_404
+from app.models import Category, Product
+from app.schemas import CategoryCreate, CategoryRead
+from app.security import AdminRoleDep
+
+
+router = APIRouter(prefix="/categories", tags=["Categories"])
+
+
+@router.post(
+    "",
+    response_model=CategoryRead,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_category(
+    payload: CategoryCreate,
+    session: SessionDep,
+    _admin: AdminRoleDep,
+) -&gt; Category:
+    category = Category(**payload.model_dump())
+    session.add(category)
+
+    try:
+        session.commit()
+    except IntegrityError as exc:
+        session.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Категория с таким name или slug уже существует",
+        ) from exc
+
+    session.refresh(category)
+    return category
+</code></pre>
+    <p>Уникальность <code>name</code> и <code>slug</code> проверяет база. Код API превращает ожидаемое нарушение ограничения в понятный HTTP-ответ.</p>
+    <hr>
+
+    <h2>Endpoint списка категорий</h2>
+    <pre class="language-python"><code>from sqlalchemy import select
+
+
+@router.get("", response_model=list[CategoryRead])
+def list_categories(session: SessionDep) -&gt; list[Category]:
+    statement = select(Category).order_by(Category.name)
+    return list(session.scalars(statement))
+</code></pre>
+    <p>Категории становятся самостоятельным ресурсом. Клиент может сначала получить список категорий, а затем создать товар с нужным <code>category_id</code>.</p>
+    <hr>
+
+    <h2>Подключаем роутер категорий</h2>
+    <p><b><code>app/main.py</code></b></p>
+    <pre class="language-python"><code>from app.routers import auth, categories, main, products
+
+
+# Внутри create_app(), рядом с существующими include_router:
+application.include_router(
+    categories.router,
+    prefix=settings.api_prefix,
+)
+</code></pre>
+    <p>Создать файл роутера недостаточно: пока <code>categories.router</code> не подключён к приложению, его endpoints не появятся ни в API, ни в OpenAPI-схеме.</p>
+    <hr>
+
+    <h2>Находим категорию или возвращаем 404</h2>
+    <p><b><code>app/dependencies.py</code></b></p>
+    <pre class="language-python"><code>from app.models import Category, Product
+
+
+def get_category_or_404(
+    category_id: int,
+    session: SessionDep,
+) -&gt; Category:
+    category = session.get(Category, category_id)
+    if category is None:
+        raise HTTPException(
+            status_code=HTTP_404_NOT_FOUND,
+            detail="Категория не найдена",
+        )
+    return category
+</code></pre>
+    <p>Один helper используется в <code>POST</code>, <code>PUT</code> и <code>PATCH</code>. Можно положиться только на <code>ForeignKey</code>, но явный поиск позволяет заранее вернуть понятный <code>404</code>.</p>
+    <hr>
+
+    <h2>Создаём товар со связью</h2>
+    <pre class="language-python"><code>from app.dependencies import (
+    ProductDep,
+    SessionDep,
+    get_category_or_404,
+    get_product_or_404,
+)
+
+
+@router.post(
+    "",
+    response_model=ProductRead,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_product(
+    product_data: ProductCreate,
+    session: SessionDep,
+    _admin: AdminRoleDep,
+) -&gt; Product:
+    category = get_category_or_404(
+        product_data.category_id,
+        session,
+    )
+
+    product = Product(
+        **product_data.model_dump(
+            mode="json",
+            exclude={"category_id"},
+        ),
+        category=category,
+    )
+    session.add(product)
+    session.commit()
+
+    return get_product_or_404(product.id, session)
+</code></pre>
+    <p>Мы присваиваем ORM-объект <code>category</code>, а SQLAlchemy сам выставляет нужный <code>category_id</code>. Это удобнее и выразительнее, чем вручную синхронизировать оба поля.</p>
+    <hr>
+
+    <h2>Обновляем PUT товара</h2>
+    <pre class="language-python"><code>@router.put("/{product_id}", response_model=ProductRead)
+def replace_product(
+    product: ProductDep,
+    product_data: ProductCreate,
+    session: SessionDep,
+    _admin: AdminRoleDep,
+) -&gt; Product:
+    category = get_category_or_404(
+        product_data.category_id,
+        session,
+    )
+
+    for field, value in product_data.model_dump(
+        mode="json",
+        exclude={"category_id"},
+    ).items():
+        setattr(product, field, value)
+
+    product.category = category
+    session.commit()
+    return get_product_or_404(product.id, session)
+</code></pre>
+    <p><code>PUT</code> получает полное состояние товара. Обычные поля обновляются как раньше, а категория назначается ORM-объектом.</p>
+    <hr>
+
+    <h2>Обновляем PATCH товара</h2>
+    <pre class="language-python"><code>@router.patch("/{product_id}", response_model=ProductRead)
+def update_product(
+    product: ProductDep,
+    product_data: ProductUpdate,
+    session: SessionDep,
+    _admin: AdminRoleDep,
+) -&gt; Product:
+    current = ProductCreate.model_validate(product).model_dump()
+    patch = product_data.model_dump(exclude_unset=True)
+    validated = ProductCreate.model_validate(current | patch)
+
+    category = get_category_or_404(
+        validated.category_id,
+        session,
+    )
+    for field, value in validated.model_dump(
+        mode="json",
+        exclude={"category_id"},
+    ).items():
+        setattr(product, field, value)
+
+    product.category = category
+    session.commit()
+    return get_product_or_404(product.id, session)
+</code></pre>
+    <p><code>ProductCreate.model_validate(product)</code> работает благодаря <code>from_attributes=True</code> и собирает текущее состояние вместе с <code>category_id</code>. Затем проект сохраняет прежнюю проверку полного объекта после частичного обновления.</p>
+    <hr>
+
+    <h2>Получаем товар с категорией</h2>
+    <p><b><code>app/dependencies.py</code></b></p>
+    <pre class="language-python"><code>from sqlalchemy import select
+from sqlalchemy.orm import selectinload
+
+
+def get_product_or_404(
+    product_id: Annotated[int, Path(ge=1)],
+    session: SessionDep,
+) -&gt; Product:
+    statement = (
+        select(Product)
+        .options(selectinload(Product.category))
+        .where(Product.id == product_id)
+    )
+    product = session.scalar(statement)
+    if product is None:
+        raise HTTPException(
+            status_code=HTTP_404_NOT_FOUND,
+            detail="Товар не найден",
+        )
+    return product
+</code></pre>
+    <p><code>selectinload(Product.category)</code> заранее загружает связанную категорию. Когда FastAPI сериализует <code>ProductRead</code>, поле <code>category</code> уже готово.</p>
+    <hr>
+
+    <h2>Что такое lazy loading</h2>
+    <pre><code>products = session.scalars(select(Product)).all()
+
+for product in products:
+    print(product.category.name)
+    # при первом доступе к product.category ORM может выполнить SELECT
+</code></pre>
+    <p>По умолчанию <code>relationship()</code> часто загружается лениво: связанный объект не читается из базы до первого обращения к атрибуту.</p>
+    <hr>
+
+    <h2>Проблема N+1</h2>
+    <pre><code>1 запрос: получить N товаров
+до N запросов: получить ещё не загруженные категории при доступе
+
+Итого в худшем случае: N + 1 SELECT
+</code></pre>
+    <p>Identity map может переиспользовать уже загруженную категорию, поэтому реальное число запросов зависит от количества разных категорий. Но оно всё равно растёт вместе с данными и делает производительность плохо предсказуемой.</p>
+    <hr>
+
+    <h2>selectinload решает N+1</h2>
+    <pre class="language-python"><code>statement = (
+    select(Product)
+    .options(selectinload(Product.category))
+    .order_by(Product.id)
+)
+products = list(session.scalars(statement))
+</code></pre>
+    <pre><code>SELECT ... FROM products ORDER BY products.id
+SELECT ... FROM categories WHERE categories.id IN (...)
+</code></pre>
+    <p>Вместо N дополнительных запросов SQLAlchemy делает один дополнительный запрос по набору внешних ключей.</p>
+    <hr>
+
+    <h2>joinedload и selectinload</h2>
+    <table>
+      <thead>
+      <tr>
+        <th>Стратегия</th>
+        <th>Как грузит</th>
+        <th>Когда удобно</th>
+      </tr>
+      </thead>
+      <tbody>
+      <tr>
+        <td><code>selectinload()</code></td>
+        <td>отдельный <code>SELECT ... WHERE id IN (...)</code></td>
+        <td>универсальный выбор для списков и коллекций</td>
+      </tr>
+      <tr>
+        <td><code>joinedload()</code></td>
+        <td>добавляет <code>JOIN</code> к основному запросу</td>
+        <td>часто удобно для одиночной many-to-one связи</td>
+      </tr>
+      <tr>
+        <td><code>lazyload()</code></td>
+        <td>грузит при первом доступе к атрибуту</td>
+        <td>простые случаи, где связь может не понадобиться</td>
+      </tr>
+      <tr>
+        <td><code>raiseload()</code></td>
+        <td>падает при незапланированной ленивой загрузке</td>
+        <td>поиск скрытых N+1 в важных сценариях</td>
+      </tr>
+      </tbody>
+    </table>
+    <p>Для учебного API используем <code>selectinload()</code>: он хорошо показывает намерение и не раздувает строки результата при коллекциях.</p>
+    <hr>
+
+    <h2>Фильтр по category_slug</h2>
+    <pre class="language-python"><code>CategorySlugParam = Annotated[
+    str | None,
+    Query(min_length=2, max_length=40),
+]
+
+
+@router.get("", response_model=list[ProductRead])
+def list_products(
+    session: SessionDep,
+    search: SearchParam = None,
+    limit: LimitParam = 10,
+    category_slug: CategorySlugParam = None,
+    only_available: bool = True,
+) -&gt; list[Product]:
+    statement = (
+        select(Product)
+        .options(selectinload(Product.category))
+        .order_by(Product.id)
+    )
+
+    if search:
+        statement = statement.where(
+            Product.title.ilike(f"%{search}%")
+        )
+    statement = statement.where(
+        Product.is_available == only_available
+    )
+    if category_slug:
+        statement = statement.join(Product.category).where(
+            Category.slug == category_slug
+        )
+
+    return list(session.scalars(statement.limit(limit)))
+</code></pre>
+    <p>Существующие <code>search</code>, <code>limit</code> и <code>only_available</code> остаются на месте. Меняется только фильтр категории: теперь он делает <code>JOIN</code> и сравнивает <code>Category.slug</code>. <code>selectinload()</code> отдельно загружает категорию для ответа.</p>
+    <hr>
+
+    <h2>JOIN не всегда означает загрузку relationship</h2>
+    <pre><code>join(Product.category)
+  └─ помогает SQL-запросу фильтровать или сортировать строки
+
+selectinload(Product.category)
+  └─ говорит ORM заранее заполнить атрибут product.category
+</code></pre>
+    <p>Это частая путаница. <code>JOIN</code> отвечает за SQL-условие, а loader option отвечает за состояние ORM-объекта после выполнения запроса.</p>
+    <hr>
+
+    <h2>Сортировка по категории</h2>
+    <pre class="language-python"><code>statement = (
+    select(Product)
+    .join(Product.category)
+    .options(selectinload(Product.category))
+    .order_by(Category.name, Product.title)
+)
+</code></pre>
+    <p>Когда нужно фильтровать или сортировать по связанной таблице, добавляем <code>join()</code>. Когда нужно вернуть связанную таблицу в ответе, добавляем стратегию загрузки.</p>
+    <hr>
+
+    <h2>Удаление категории</h2>
+    <p>Если в категории есть товары, удаление должно быть осознанным бизнес-решением.</p>
+    <table>
+      <thead>
+      <tr>
+        <th>Вариант</th>
+        <th>Поведение</th>
+      </tr>
+      </thead>
+      <tbody>
+      <tr>
+        <td>запретить удаление</td>
+        <td>вернуть <code>409 Conflict</code>, если есть товары</td>
+      </tr>
+      <tr>
+        <td>перенести товары</td>
+        <td>сначала назначить им другую категорию</td>
+      </tr>
+      <tr>
+        <td>удалить товары каскадом</td>
+        <td>опасно для каталога, подходит не всем доменам</td>
+      </tr>
+      </tbody>
+    </table>
+    <p>В Products API безопаснее начать с запрета удаления непустой категории.</p>
+    <hr>
+
+    <h2>Проверка перед удалением</h2>
+    <pre class="language-python"><code>from sqlalchemy import func
+
+
+@router.delete("/{category_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_category(
+    category_id: int,
+    session: SessionDep,
+    _admin: AdminRoleDep,
+) -&gt; None:
+    category = get_category_or_404(category_id, session)
+
+    products_count = session.scalar(
+        select(func.count(Product.id)).where(
+            Product.category_id == category.id
+        )
+    )
+    if products_count:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Category contains products",
+        )
+
+    session.delete(category)
+    session.commit()
+</code></pre>
+    <p>Такой код явно говорит клиенту, почему операция невозможна. База остаётся последней линией защиты, но API не отдаёт наружу случайную ошибку драйвера.</p>
+    <hr>
+
+    <h2>Тестируем вложенный ответ</h2>
+    <pre class="language-python"><code>def test_create_product_with_category(admin_client):
+    category_response = admin_client.post(
+        "/api/v1/categories",
+        json={"name": "Electronics", "slug": "electronics"},
+    )
+    category_id = category_response.json()["id"]
+
+    product_response = admin_client.post(
+        "/api/v1/products",
+        json={
+            "title": "Mechanical Keyboard",
+            "category_id": category_id,
+            "price": 120.00,
+            "stock_count": 5,
+        },
+    )
+
+    assert product_response.status_code == 201
+    body = product_response.json()
+    assert body["category"]["slug"] == "electronics"
+    assert "category_id" not in body
+</code></pre>
+    <p>Тест проверяет внешний контракт API: клиент создаёт товар по <code>category_id</code>, а получает читаемую вложенную категорию.</p>
+    <hr>
+
+    <h2>Тестируем фильтр по категории</h2>
+    <pre class="language-python"><code>def test_filter_products_by_category_slug(admin_client):
+    electronics = admin_client.post(
+        "/api/v1/categories",
+        json={"name": "Electronics", "slug": "electronics"},
+    ).json()
+    books = admin_client.post(
+        "/api/v1/categories",
+        json={"name": "Books", "slug": "books"},
+    ).json()
+
+    admin_client.post(
+        "/api/v1/products",
+        json={
+            "title": "Mechanical Keyboard",
+            "category_id": electronics["id"],
+            "price": 120.00,
+        },
+    )
+    admin_client.post(
+        "/api/v1/products",
+        json={
+            "title": "Clean Code",
+            "category_id": books["id"],
+            "price": 39.00,
+        },
+    )
+
+    response = admin_client.get(
+        "/api/v1/products?category_slug=electronics"
+    )
+
+    assert response.status_code == 200
+    products = response.json()
+    assert [product["title"] for product in products] == [
+        "Mechanical Keyboard"
+    ]
+</code></pre>
+    <p>Фильтр проверяет не только SQLAlchemy-запрос, но и то, что API-контракт остался удобным для клиента.</p>
+    <hr>
+
+    <h2>Минимальный workflow</h2>
+    <pre><code>1. Добавить Category ORM-модель
+2. Заменить Product.category на Product.category_id + relationship
+3. Создать Alembic-миграцию
+4. Аккуратно перенести старые category-строки в categories
+5. Обновить ProductCreate, ProductUpdate и ProductRead
+6. Добавить и подключить categories-роутер
+7. Сохранить AdminRoleDep в изменяющих endpoints
+8. Обновить POST, PUT, PATCH и фильтры товаров
+9. Добавить selectinload для ответов со связями
+10. Проверить alembic upgrade head, alembic check и pytest
+</code></pre>
+    <p>Связь между таблицами затрагивает весь вертикальный срез: схему базы, ORM-модели, миграции, API-схемы, роутеры и тесты.</p>
+    <hr>
+
+    <h2>Практика</h2>
+    <p>Задача: вынести категорию товара в отдельную таблицу и обновить Products API.</p>
+    <ol>
+      <li>Создайте ORM-модель <code>Category</code> с полями <code>id</code>, <code>name</code> и <code>slug</code>.</li>
+      <li>Замените <code>Product.category</code> на <code>Product.category_id</code> и <code>Product.category</code> relationship.</li>
+      <li>Добавьте обратную связь <code>Category.products</code> через <code>back_populates</code>.</li>
+      <li>Создайте Alembic-миграцию для таблицы <code>categories</code> и внешнего ключа в <code>products</code>.</li>
+      <li>Если в базе уже есть товары, перенесите старые строковые категории в новую таблицу.</li>
+      <li>Добавьте схемы <code>CategoryCreate</code> и <code>CategoryRead</code>.</li>
+      <li>Обновите <code>ProductCreate</code>: на входе используйте <code>category_id</code>.</li>
+      <li>Обновите <code>ProductUpdate</code>, чтобы категорию можно было менять через <code>PATCH</code>.</li>
+      <li>Обновите <code>ProductRead</code>: в ответе возвращайте вложенную <code>category</code>.</li>
+      <li>Добавьте endpoints категорий, защитите изменяющие операции через <code>AdminRoleDep</code> и подключите роутер в <code>create_app()</code>.</li>
+      <li>Обновите <code>POST</code>, <code>PUT</code> и <code>PATCH</code> товаров для работы с <code>category_id</code>.</li>
+      <li>В списке товаров добавьте фильтр <code>category_slug</code>, сохранив <code>search</code>, <code>limit</code> и <code>only_available</code>.</li>
+      <li>Используйте <code>selectinload(Product.category)</code> в запросах, которые возвращают товары наружу.</li>
+      <li>Проверьте миграцию на PostgreSQL: <code>alembic upgrade head</code>, заполнение старых товаров и ограничение <code>NOT NULL</code>.</li>
+      <li>Проверьте сценарии создания товара, фильтрации по категории и попытки создать товар с несуществующей категорией.</li>
+    </ol>
+    <p>Дополнительная задача: запретите удалять категорию, если в ней есть товары, и покройте этот сценарий тестом на <code>409 Conflict</code>.</p>
+    <hr>
+
+    <h2>Итоги</h2>
+    <p>На этой лекции мы научились:</p>
+    <ul>
+      <li>понимать разницу между <code>ForeignKey</code> и <code>relationship()</code>.</li>
+      <li>описывать many-to-one и one-to-many связи в SQLAlchemy 2.0.</li>
+      <li>использовать <code>back_populates</code> для двусторонней ORM-связи.</li>
+      <li>переводить строковое поле в отдельную таблицу через Alembic-миграцию.</li>
+      <li>отличать изменение схемы от переноса данных.</li>
+      <li>возвращать вложенные ORM-объекты через Pydantic <code>from_attributes=True</code>.</li>
+      <li>фильтровать товары по полям связанной таблицы через <code>join()</code>.</li>
+      <li>избегать N+1 через <code>selectinload()</code>.</li>
+      <li>проектировать безопасное удаление связанных данных.</li>
+    </ul>
+    <p>На следующей лекции разберём транзакции глубже: атомарные операции, <code>flush()</code>, rollback, обработку <code>IntegrityError</code> и сценарии, где один HTTP-запрос меняет несколько таблиц сразу.</p>
+    <hr>
+
+    <h2>Официальные материалы</h2>
+    <ul>
+      <li><a href="https://docs.sqlalchemy.org/en/20/orm/basic_relationships.html">SQLAlchemy 2.0: Basic Relationship Patterns</a></li>
+      <li><a href="https://docs.sqlalchemy.org/en/20/orm/queryguide/relationships.html">SQLAlchemy 2.0: Relationship Loading Techniques</a></li>
+      <li><a href="https://docs.sqlalchemy.org/en/20/core/constraints.html#defining-foreign-keys">SQLAlchemy 2.0: Defining Foreign Keys</a></li>
+      <li><a href="https://docs.pydantic.dev/latest/concepts/models/#arbitrary-class-instances">Pydantic: Arbitrary class instances and from_attributes</a></li>
+      <li><a href="https://fastapi.tiangolo.com/tutorial/response-model/">FastAPI: Response Model</a></li>
+    </ul>
+    <hr>
+  </db-content>
+  <footer class="site-footer">
+    <div class="footer-logo-link"></div>
+  </footer>
+</div>
+</body>
+</html>

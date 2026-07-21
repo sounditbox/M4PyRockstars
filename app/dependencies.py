@@ -6,13 +6,14 @@ from fastapi import Depends, Path, HTTPException
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from jwt import InvalidTokenError
 from pydantic import ValidationError
-from sqlalchemy.orm import Session
+from sqlalchemy import select
+from sqlalchemy.orm import Session, selectinload
 from starlette.requests import Request
 from starlette.status import HTTP_404_NOT_FOUND, HTTP_403_FORBIDDEN, \
     HTTP_401_UNAUTHORIZED
 
 from app.core.config import Settings
-from app.models import Product
+from app.models import Product, Category
 from app.schemas import ProductRead, UserRead, TokenPayload
 from app.storage import ProductStorage, UserStorage
 
@@ -26,18 +27,23 @@ def get_user_storage(request: Request) -> UserStorage:
 
 
 
+
 def get_product_or_404(
-        product_id: Annotated[int, Path(ge=1)],
-        session: SessionDep,
+    product_id: Annotated[int, Path(ge=1)],
+    session: SessionDep,
 ) -> Product:
-    product = session.get(Product, product_id)
+    statement = (
+        select(Product)
+        .options(selectinload(Product.category))
+        .where(Product.id == product_id)
+    )
+    product = session.scalar(statement)
     if product is None:
         raise HTTPException(
             status_code=HTTP_404_NOT_FOUND,
             detail="Товар не найден",
         )
     return product
-
 
 @lru_cache
 def get_settings() -> Settings:
@@ -141,3 +147,18 @@ def get_session(request: Request) -> Iterator[Session]:
 
 
 SessionDep = Annotated[Session, Depends(get_session)]
+
+
+def get_category_or_404(
+        category_id: Annotated[int, Path(ge=1)],
+        session: SessionDep) -> Category:
+    category = session.get(Category, category_id)
+    if category is None:
+        raise HTTPException(
+            status_code=HTTP_404_NOT_FOUND,
+            detail="Товар не найден",
+        )
+    return category
+
+
+CategoryDep = Annotated[Category, Depends(get_category_or_404)]

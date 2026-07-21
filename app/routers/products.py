@@ -2,10 +2,12 @@ from typing import Annotated
 
 from fastapi import APIRouter, Query
 from sqlalchemy import select
+from sqlalchemy.orm import selectinload
 from starlette.status import HTTP_201_CREATED, HTTP_204_NO_CONTENT
 
-from app.dependencies import ProductDep, SessionDep
-from app.models import Product
+from app.dependencies import ProductDep, SessionDep, get_category_or_404, \
+    get_product_or_404
+from app.models import Product, Category
 from app.schemas import ProductRead, ProductCreate, ProductUpdate
 from app.security import AdminRoleDep
 
@@ -16,7 +18,12 @@ router = APIRouter(
 
 SearchParam = Annotated[str | None, Query(min_length=2, max_length=50)]
 LimitParam = Annotated[int, Query(ge=1, le=100)]
-CategoryParam = Annotated[str | None, Query(min_length=2, max_length=40)]
+CategorySlugParam = Annotated[
+    str | None,
+    Query(min_length=2, max_length=40),
+]
+
+
 @router.post(
     "",
     response_model=ProductRead,
@@ -26,33 +33,53 @@ def create_product(
         product_data: ProductCreate,
         session: SessionDep,
         _admin: AdminRoleDep,
-):
+) -> Product:
+    category = get_category_or_404(
+        product_data.category_id,
+        session,
+    )
+
     product = Product(
-        **product_data.model_dump(mode="json")
+        **product_data.model_dump(
+            mode="json",
+            exclude={"category_id"},
+        ),
+        category=category,
     )
     session.add(product)
     session.commit()
-    session.refresh(product)
-    return product
+
+    return get_product_or_404(product.id, session)
 
 
-@router.get("", response_model=list[ProductRead], status_code=200,
-            summary="Products endpoint",
-            description="Products endpoint description", tags=["Products"])
+@router.get("", response_model=list[ProductRead])
 def list_products(
         session: SessionDep,
         search: SearchParam = None,
         limit: LimitParam = 10,
-        category: CategoryParam = None,
+        category_slug: CategorySlugParam = None,
         only_available: bool = True,
-) -> list[ProductRead]:
-    statement = select(Product).order_by(Product.id)
+) -> list[Product]:
+    statement = (
+        select(Product)
+        .join(Product.category)
+        .options(selectinload(Product.category))
+        .order_by(Category.name, Product.title)
+    )
+
     if search:
-        statement = statement.filter(Product.title.ilike(f"%{search}%"))
-    statement = statement.filter(Product.is_available == only_available)
-    if category:
-        statement = statement.filter(Product.category == category)
-    return session.scalars(statement.limit(limit)).all()
+        statement = statement.where(
+            Product.title.ilike(f"%{search}%")
+        )
+    statement = statement.where(
+        Product.is_available == only_available
+    )
+    if category_slug:
+        statement = statement.where(
+            Category.slug == category_slug
+        )
+
+    return list(session.scalars(statement.limit(limit)))
 
 
 @router.get("/{product_id}", response_model=ProductRead, status_code=200,
@@ -64,47 +91,53 @@ async def get_product(
     return product
 
 
-@router.put("/{product_id}", response_model=ProductRead,
-            tags=["Products"], status_code=200,
-            summary="Update product endpoint",
-            description="Update product endpoint description"
-            )
+@router.put("/{product_id}", response_model=ProductRead)
 def replace_product(
         product: ProductDep,
         product_data: ProductCreate,
         session: SessionDep,
         _admin: AdminRoleDep,
-):
-    for field, value in product_data.model_dump(mode="json").items():
+) -> Product:
+    category = get_category_or_404(
+        product_data.category_id,
+        session,
+    )
+
+    for field, value in product_data.model_dump(
+            mode="json",
+            exclude={"category_id"},
+    ).items():
         setattr(product, field, value)
 
+    product.category = category
     session.commit()
-    session.refresh(product)
-    return product
+    return get_product_or_404(product.id, session)
 
 
-@router.patch(
-    "/{product_id}",
-    response_model=ProductRead,
-)
+@router.patch("/{product_id}", response_model=ProductRead)
 def update_product(
         product: ProductDep,
         product_data: ProductUpdate,
         session: SessionDep,
         _admin: AdminRoleDep,
-):
-    current = ProductRead.model_validate(product).model_dump(
-        exclude={"id"}
-    )
+) -> Product:
+    current = ProductCreate.model_validate(product).model_dump()
     patch = product_data.model_dump(exclude_unset=True)
     validated = ProductCreate.model_validate(current | patch)
 
-    for field, value in validated.model_dump(mode="json").items():
+    category = get_category_or_404(
+        validated.category_id,
+        session,
+    )
+    for field, value in validated.model_dump(
+            mode="json",
+            exclude={"category_id"},
+    ).items():
         setattr(product, field, value)
 
+    product.category = category
     session.commit()
-    session.refresh(product)
-    return product
+    return get_product_or_404(product.id, session)
 
 
 @router.delete(
@@ -112,9 +145,9 @@ def update_product(
     status_code=HTTP_204_NO_CONTENT,
 )
 def delete_product(
-    product: ProductDep,
-    session: SessionDep,
-    _admin: AdminRoleDep,
+        product: ProductDep,
+        session: SessionDep,
+        _admin: AdminRoleDep,
 ):
     session.delete(product)
     session.commit()

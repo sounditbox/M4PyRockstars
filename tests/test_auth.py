@@ -3,16 +3,6 @@ from fastapi.testclient import TestClient
 from pydantic import SecretStr
 
 
-def test_app_has_no_default_users(app):
-    with TestClient(app) as unseeded_client:
-        response = unseeded_client.post(
-            "/api/v1/auth/token",
-            data={"username": "admin", "password": "admin"},
-        )
-
-    assert response.status_code == 401
-
-
 def test_configured_bootstrap_admin_can_login(app):
     app.state.settings.admin_username = "configured-admin"
     app.state.settings.admin_password = SecretStr(

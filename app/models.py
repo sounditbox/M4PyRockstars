@@ -1,4 +1,6 @@
-from sqlalchemy.orm import DeclarativeBase
+from __future__ import annotations
+
+from sqlalchemy.orm import DeclarativeBase, relationship
 
 from decimal import Decimal
 
@@ -9,7 +11,7 @@ from sqlalchemy import (
     Integer,
     MetaData,
     Numeric,
-    String,
+    String, ForeignKey,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -34,7 +36,10 @@ class Product(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     title: Mapped[str] = mapped_column(String(80), index=True)
-    category: Mapped[str] = mapped_column(String(40), index=True)
+    category_id: Mapped[int] = mapped_column(
+        ForeignKey("categories.id"),
+        index=True,
+    )
     price: Mapped[Decimal] = mapped_column(Numeric(12, 2))
     sale_price: Mapped[Decimal | None] = mapped_column(
         Numeric(12, 2), nullable=True
@@ -56,4 +61,24 @@ class Product(Base):
     )
     specs: Mapped[dict[str, object] | None] = mapped_column(
         JSON, nullable=True
+    )
+
+    category: Mapped[Category] = relationship(
+        back_populates="products"
+    )
+
+
+class Category(Base):
+    __tablename__ = "categories"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(
+        String(80), unique=True, index=True
+    )
+    slug: Mapped[str] = mapped_column(
+        String(40), unique=True, index=True
+    )
+
+    products: Mapped[list[Product]] = relationship(
+        back_populates="category"
     )
