@@ -21,6 +21,19 @@ def test_configured_bootstrap_admin_can_login(app):
     assert response.status_code == 200
 
 
+def test_database_users_survive_app_restart(app, seed_users):
+    with TestClient(app):
+        seed_users(app)
+
+    with TestClient(app) as restarted_client:
+        response = restarted_client.post(
+            "/api/v1/auth/token",
+            data={"username": "admin", "password": "admin"},
+        )
+
+    assert response.status_code == 200
+
+
 def test_login_returns_bearer_token(client):
     response = client.post(
         "/api/v1/auth/token",

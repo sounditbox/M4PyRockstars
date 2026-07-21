@@ -1,7 +1,7 @@
 from fastapi import APIRouter
 from pwdlib.exceptions import UnknownHashError
 
-from app.dependencies import LoginForm, UserStorageDep, SettingsDep, \
+from app.dependencies import LoginForm, SessionDep, SettingsDep, \
     invalid_credentials, ActiveUserDep
 from app.schemas import Token, UserRead
 from app.security import authenticate_user, create_access_token
@@ -12,12 +12,12 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 @router.post("/token", response_model=Token)
 def login(
         form_data: LoginForm,
-        users: UserStorageDep,
+        session: SessionDep,
         settings: SettingsDep,
 ) -> Token:
     try:
         user = authenticate_user(
-            users, form_data.username, form_data.password
+            session, form_data.username, form_data.password
         )
     except UnknownHashError:
         raise invalid_credentials()

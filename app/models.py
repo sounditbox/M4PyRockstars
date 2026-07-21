@@ -11,7 +11,9 @@ from sqlalchemy import (
     Integer,
     MetaData,
     Numeric,
-    String, ForeignKey,
+    String,
+    ForeignKey,
+    false,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -29,6 +31,28 @@ naming_convention = {
 
 class Base(DeclarativeBase):
     metadata = MetaData(naming_convention=naming_convention)
+
+
+class User(Base):
+    __tablename__ = "users"
+    __table_args__ = (
+        CheckConstraint(
+            "role IN ('user', 'admin')",
+            name="ck_users_role",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    username: Mapped[str] = mapped_column(
+        String(80), unique=True, index=True
+    )
+    role: Mapped[str] = mapped_column(
+        String(20), default="user", server_default="user"
+    )
+    disabled: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=false()
+    )
+    hashed_password: Mapped[str] = mapped_column(String(255))
 
 
 class Product(Base):

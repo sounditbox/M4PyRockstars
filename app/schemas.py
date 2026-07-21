@@ -114,14 +114,12 @@ Role = Literal["user", "admin"]
 
 
 class UserRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     id: int
     username: str
     role: Role = "user"
     disabled: bool = False
-
-
-class UserInDB(UserRead):
-    hashed_password: str
 
 
 class Token(BaseModel):

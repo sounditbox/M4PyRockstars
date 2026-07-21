@@ -13,17 +13,8 @@ from starlette.status import HTTP_404_NOT_FOUND, HTTP_403_FORBIDDEN, \
     HTTP_401_UNAUTHORIZED
 
 from app.core.config import Settings
-from app.models import Product, Category
+from app.models import Product, Category, User
 from app.schemas import ProductRead, UserRead, TokenPayload
-from app.storage import ProductStorage, UserStorage
-
-
-def get_product_storage(request: Request) -> ProductStorage:
-    return request.app.state.product_storage
-
-
-def get_user_storage(request: Request) -> UserStorage:
-    return request.app.state.user_storage
 
 
 
@@ -57,16 +48,6 @@ SettingsDep = Annotated[
 
 ProductDep = Annotated[Product, Depends(get_product_or_404)]
 
-StorageDep = Annotated[
-    ProductStorage,
-    Depends(get_product_storage),
-]
-
-UserStorageDep = Annotated[
-    UserStorage,
-    Depends(get_user_storage),
-]
-
 oauth2_scheme = OAuth2PasswordBearer(
     tokenUrl="api/v1/auth/token",
 )
@@ -81,19 +62,19 @@ TokenDep = Annotated[str, Depends(oauth2_scheme)]
 
 def get_current_user(
         token: TokenDep,
-        users: UserStorageDep,
+        session: SessionDep,
         settings: SettingsDep,
 ) -> UserRead:
     try:
         token_data = decode_access_token(token, settings)
-        user = users.get(int(token_data.sub))
+        user = session.get(User, int(token_data.sub))
     except (InvalidTokenError, ValidationError, ValueError):
         raise invalid_credentials()
 
     if user is None:
         raise invalid_credentials()
 
-    return UserRead.model_validate(user.model_dump())
+    return UserRead.model_validate(user)
 
 
 CurrentUserDep = Annotated[

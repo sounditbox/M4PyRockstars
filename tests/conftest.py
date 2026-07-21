@@ -16,7 +16,8 @@ from fastapi.testclient import TestClient
 from app.core.config import Settings
 from app.dependencies import get_settings, get_current_active_user
 from app.main import create_app
-from app.schemas import UserInDB, UserRead
+from app.models import User
+from app.schemas import UserRead
 from app.security import hash_password
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -39,6 +40,8 @@ def app(tmp_path: Path) -> FastAPI:
         api_prefix="/api/v1",
         database_url=f"sqlite+pysqlite:///{database_path.as_posix()}",
         jwt_secret_key="test-secret-not-for-production-use-only",
+        admin_username=None,
+        admin_password=None,
     )
 
     run_migrations(settings.database_url)
@@ -49,20 +52,27 @@ def app(tmp_path: Path) -> FastAPI:
 
 
 def seed_test_users(app: FastAPI) -> None:
-    app.state.user_storage.set_storage([
-        UserInDB(
-            id=1,
-            username="admin",
-            role="admin",
-            hashed_password=hash_password("admin"),
-        ),
-        UserInDB(
-            id=2,
-            username="user",
-            role="user",
-            hashed_password=hash_password("user"),
-        ),
-    ])
+    with app.state.session_factory() as session:
+        session.add_all([
+            User(
+                id=1,
+                username="admin",
+                role="admin",
+                hashed_password=hash_password("admin"),
+            ),
+            User(
+                id=2,
+                username="user",
+                role="user",
+                hashed_password=hash_password("user"),
+            ),
+        ])
+        session.commit()
+
+
+@pytest.fixture
+def seed_users():
+    return seed_test_users
 
 
 @pytest.fixture

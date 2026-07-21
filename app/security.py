@@ -4,12 +4,14 @@ from typing import Annotated
 import jwt
 from fastapi import HTTPException, Depends
 from pwdlib import PasswordHash
+from sqlalchemy import select
+from sqlalchemy.orm import Session
 from starlette.status import HTTP_403_FORBIDDEN
 
 from app.core.config import Settings
 from app.dependencies import ActiveUserDep
-from app.schemas import UserInDB, Role, UserRead
-from app.storage import UserStorage
+from app.models import User
+from app.schemas import Role, UserRead
 
 password_hash = PasswordHash.recommended()
 DUMMY_HASH = password_hash.hash("not-a-real-password")
@@ -24,11 +26,13 @@ def verify_password(password: str, hash_: str) -> bool:
 
 
 def authenticate_user(
-        storage: UserStorage,
+        session: Session,
         username: str,
         password: str,
-) -> UserInDB | None:
-    user = storage.get_by_username(username)
+) -> User | None:
+    user = session.scalar(
+        select(User).where(User.username == username)
+    )
 
     if user is None:
         verify_password(password, DUMMY_HASH)
