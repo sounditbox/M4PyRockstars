@@ -14,6 +14,8 @@ class Settings(BaseSettings):
     access_token_expire_minutes: int = 30
     admin_username: str | None = None
     admin_password: SecretStr | None = None
+    mongodb_url: str | None = None
+    mongodb_database: str = "products"
 
     @model_validator(mode="after")
     def validate_admin(self) -> Self:
@@ -29,5 +31,5 @@ class Settings(BaseSettings):
         env_file=".env",
         env_file_encoding="utf-8",
         extra="ignore",
-        case_sensitive=False
+        case_sensitive=False,
     )

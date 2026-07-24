@@ -1,0 +1,1010 @@
+<!doctype html>
+<html lang="ru" class="light">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link href="https://super-dev-styles.github.io/website-assets/styles.css" rel="stylesheet">
+  <link href="https://super-dev-styles.github.io/website-assets/view.css" rel="stylesheet">
+  <link href="https://super-dev-styles.github.io/website-assets/slides.css" rel="stylesheet">
+  <script src="https://super-dev-styles.github.io/website-assets/slides.js" defer></script>
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism.min.css" rel="stylesheet">
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/plugins/line-numbers/prism-line-numbers.min.css" rel="stylesheet">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-core.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/plugins/autoloader/prism-autoloader.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/plugins/line-numbers/prism-line-numbers.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+  <script>mermaid.initialize({startOnLoad: true, theme: "neutral"});</script>
+  <style>
+    :root {
+      --deck-ink: #172126;
+      --deck-muted: #56636a;
+      --deck-line: #d9e1e5;
+      --deck-soft: #f4f7f8;
+      --deck-green: #16855b;
+      --deck-green-soft: #e8f5ef;
+      --deck-blue: #1769aa;
+    }
+
+    body {
+      color: var(--deck-ink);
+    }
+
+    .content {
+      max-width: 1240px;
+      padding-right: 32px;
+      padding-left: 32px;
+    }
+
+    db-content > .slide.active {
+      min-height: calc(100vh - 2px);
+      padding: 44px 32px 32px;
+      box-sizing: border-box;
+    }
+
+    db-content > .slide:first-of-type.active {
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      border-top: 8px solid var(--deck-green);
+    }
+
+    .slide h1,
+    .slide h2 {
+      color: var(--deck-ink);
+      letter-spacing: 0;
+    }
+
+    .slide h1 {
+      max-width: 920px;
+      margin-bottom: 26px;
+      font-size: 2.7rem;
+      line-height: 1.08;
+    }
+
+    .slide h2 {
+      margin-top: 0;
+      margin-bottom: 24px;
+      padding-left: 16px;
+      border-left: 6px solid var(--deck-green);
+      font-size: 2rem;
+      line-height: 1.18;
+    }
+
+    .slide p,
+    .slide li,
+    .slide td,
+    .slide th {
+      letter-spacing: 0;
+    }
+
+    .slide p {
+      max-width: 94ch;
+      color: var(--deck-muted);
+      line-height: 1.58;
+    }
+
+    .slide li {
+      margin-bottom: 8px;
+      line-height: 1.48;
+    }
+
+    .slide table {
+      width: 100%;
+      margin: 18px 0 22px;
+      border-collapse: collapse;
+      font-size: 0.94rem;
+    }
+
+    .slide th,
+    .slide td {
+      padding: 12px 14px;
+      border: 1px solid var(--deck-line);
+      vertical-align: top;
+    }
+
+    .slide th {
+      color: #103f35;
+      background: var(--deck-green-soft);
+      text-align: left;
+    }
+
+    .slide tbody tr:nth-child(even) {
+      background: var(--deck-soft);
+    }
+
+    .slide pre,
+    .slide pre[class*="language-"] {
+      max-width: 100%;
+      margin: 18px 0 22px;
+      padding: 18px 20px;
+      overflow-x: auto;
+      border: 1px solid var(--deck-line);
+      border-left: 4px solid var(--deck-blue);
+      border-radius: 6px;
+      box-sizing: border-box;
+      font-size: 0.88rem;
+      line-height: 1.48;
+      box-shadow: 0 7px 22px rgba(23, 33, 38, 0.06);
+    }
+
+    .slide pre.code-compact,
+    .slide pre.code-compact[class*="language-"] {
+      font-size: 0.76rem;
+      line-height: 1.36;
+    }
+
+    .slide code {
+      letter-spacing: 0;
+    }
+
+    .lecture-visual {
+      display: block;
+      width: auto;
+      max-width: min(800px, 100%);
+      max-height: 48vh;
+      margin: 20px auto;
+      border: 1px solid var(--deck-line);
+      border-radius: 6px;
+      object-fit: contain;
+    }
+
+    .media-table {
+      display: grid;
+      grid-template-columns: minmax(280px, 0.85fr) minmax(500px, 1.35fr);
+      gap: 26px;
+      align-items: center;
+      margin: 8px 0 18px;
+    }
+
+    .media-table-balanced {
+      grid-template-columns: minmax(340px, 0.95fr) minmax(460px, 1.05fr);
+    }
+
+    .media-table .lecture-visual,
+    .media-table table {
+      margin: 0;
+    }
+
+    .media-table .lecture-visual {
+      width: 100%;
+      max-height: none;
+    }
+
+    .mermaid {
+      max-width: 100%;
+      margin: 22px auto;
+      padding: 8px 0;
+      text-align: center;
+    }
+
+    .mermaid svg {
+      max-width: 100%;
+      max-height: 55vh;
+    }
+
+    #slide-menu {
+      border-right-color: var(--deck-line);
+    }
+
+    #slide-menu a.active-link {
+      color: #0c6746;
+      background: var(--deck-green-soft);
+    }
+
+    #slide-navigation {
+      gap: 16px;
+      border-top: 1px solid var(--deck-line);
+    }
+
+    #slide-navigation button {
+      min-width: 132px;
+      border-radius: 6px;
+      letter-spacing: 0;
+    }
+
+    #slide-navigation button:first-child {
+      background: #42535c;
+    }
+
+    #slide-navigation button:last-child {
+      background: var(--deck-green);
+    }
+
+    #slide-navigation button:disabled {
+      color: #6c787e;
+      background: #d8dee1;
+      box-shadow: none;
+    }
+
+    @media (max-width: 1240px) {
+      .media-table,
+      .media-table-balanced {
+        grid-template-columns: 1fr;
+      }
+
+      .media-table .lecture-visual {
+        width: auto;
+        max-width: min(720px, 100%);
+        max-height: 34vh;
+        margin: 0 auto;
+      }
+    }
+
+    @media (max-width: 700px) {
+      .content {
+        padding-right: 18px;
+        padding-left: 18px;
+      }
+
+      db-content > .slide.active {
+        min-height: 0;
+        padding: 30px 8px 24px;
+      }
+
+      .slide h1 {
+        font-size: 2rem;
+      }
+
+      .slide h2 {
+        font-size: 1.55rem;
+      }
+
+      .slide table {
+        display: block;
+        overflow-x: auto;
+        font-size: 0.86rem;
+      }
+
+      .slide pre,
+      .slide pre[class*="language-"],
+      .slide pre.code-compact,
+      .slide pre.code-compact[class*="language-"] {
+        padding: 14px;
+        font-size: 0.74rem;
+      }
+    }
+  </style>
+  <title>Лекция 10: MongoDB для характеристик товаров</title>
+</head>
+<body>
+<div class="content lecture-content post-content">
+  <db-content>
+    <h1>Лекция 10: MongoDB для характеристик товаров</h1>
+    <p>В Products API основные данные товара уже хранятся в PostgreSQL. Но характеристики клавиатуры, монитора и мебели выглядят по-разному и быстро расширяют единую Pydantic-схему.</p>
+    <p>Добавим MongoDB для необязательных расширенных характеристик существующего товара и реализуем endpoint <code>/products/{product_id}/attributes</code> через PyMongo Async.</p>
+    <hr>
+
+    <h2>Когда MongoDB действительно полезна</h2>
+    <ul>
+      <li>характеристики естественно читаются и изменяются как единый документ;</li>
+      <li>набор полей сильно зависит от категории товара;</li>
+      <li>новые характеристики появляются чаще, чем меняется основная модель Product;</li>
+      <li>по расширенным атрибутам нужны отдельные документные запросы.</li>
+    </ul>
+    <p>Для небольшого фиксированного набора полей PostgreSQL JSON/JSONB обычно достаточно. MongoDB выбираем не ради скорости или масштаба сами по себе, а когда документ становится самостоятельной моделью.</p>
+    <div class="mermaid">
+      flowchart LR
+      subgraph UP["Scale-up: усиливаем один узел"]
+        U1["8 CPU<br/>16 GB RAM"] --> U2["16 CPU<br/>64 GB RAM"]
+      end
+      subgraph OUT["Scale-out: добавляем узлы"]
+        R["Router"] --> N1["Node 1"]
+        R --> N2["Node 2"]
+        R --> N3["Node 3"]
+      end
+    </div>
+    <p>SQL и NoSQL могут масштабироваться разными способами. Выбор хранилища начинается с модели данных и запросов, а не с лозунга «вертикально против горизонтально».</p>
+    <hr>
+
+    <h2>NoSQL — семейство моделей</h2>
+    <div class="media-table">
+      <img
+        class="lecture-visual"
+        src="assets/lecture10/nosql-types.jpeg"
+        alt="Документная, графовая, key-value и wide-column модели NoSQL"
+        data-max-width="800"
+      >
+      <table>
+      <thead>
+      <tr>
+        <th>Модель</th>
+        <th>Пример</th>
+        <th>Для каких задач</th>
+      </tr>
+      </thead>
+      <tbody>
+      <tr>
+        <td><b>Document</b></td>
+        <td>MongoDB</td>
+        <td>вложенные объекты, каталоги, профили, контент</td>
+      </tr>
+      <tr>
+        <td><b>Key-value</b></td>
+        <td>Redis</td>
+        <td>кэш, сессии, счётчики, данные с TTL</td>
+      </tr>
+      <tr>
+        <td><b>Graph</b></td>
+        <td>Neo4j</td>
+        <td>маршруты, социальные связи, рекомендации</td>
+      </tr>
+      <tr>
+        <td><b>Wide-column</b></td>
+        <td>Cassandra</td>
+        <td>распределённая запись больших потоков данных</td>
+      </tr>
+      </tbody>
+      </table>
+    </div>
+    <p><b>NoSQL — не одна технология и не «база без SQL».</b> Это семейство моделей с разными способами хранения и запросов. В этой лекции нужна document model: один документ содержит расширенные характеристики одного товара.</p>
+    <hr>
+
+    <h2>Главные сущности MongoDB</h2>
+    <table>
+      <thead>
+      <tr>
+        <th>Сущность</th>
+        <th>Что означает</th>
+        <th>В нашем проекте</th>
+      </tr>
+      </thead>
+      <tbody>
+      <tr>
+        <td><b>Database</b></td>
+        <td>контейнер для collections</td>
+        <td><code>products</code></td>
+      </tr>
+      <tr>
+        <td><b>Collection</b></td>
+        <td>набор документов одного назначения</td>
+        <td><code>product_attributes</code></td>
+      </tr>
+      <tr>
+        <td><b>Document</b></td>
+        <td>BSON-объект с данными одной сущности</td>
+        <td>характеристики одного Product</td>
+      </tr>
+      <tr>
+        <td><b>Field</b></td>
+        <td>именованное значение или вложенный объект</td>
+        <td><code>product_id</code>, <code>attributes</code></td>
+      </tr>
+      <tr>
+        <td><b><code>_id</code></b></td>
+        <td>уникальный идентификатор документа</td>
+        <td>автоматический <code>ObjectId</code></td>
+      </tr>
+      </tbody>
+    </table>
+    <pre><code>database: products
+└── collection: product_attributes
+    └── document
+        ├── _id: ObjectId(...)
+        ├── product_id: 42
+        └── attributes: {...}
+</code></pre>
+    <p>MongoDB хранит документы в формате <b>BSON</b>: он похож на JSON, но поддерживает дополнительные типы, включая <code>ObjectId</code>, даты, бинарные данные и <code>Decimal128</code>.</p>
+    <hr>
+
+    <h2>SQL и документная модель</h2>
+    <div class="media-table media-table-balanced">
+      <img
+        class="lecture-visual"
+        src="assets/lecture10/sql-vs-nosql.jpeg"
+        alt="Выбор между SQL и NoSQL зависит от задачи"
+        data-max-width="512"
+      >
+      <table>
+      <thead>
+      <tr>
+        <th>Реляционная модель</th>
+        <th>Документная модель</th>
+      </tr>
+      </thead>
+      <tbody>
+      <tr>
+        <td>таблицы, строки, колонки</td>
+        <td>collections и BSON-документы</td>
+      </tr>
+      <tr>
+        <td>связи через ForeignKey и JOIN</td>
+        <td>embedding или reference</td>
+      </tr>
+      <tr>
+        <td>схема меняется миграциями</td>
+        <td>документы могут эволюционировать постепенно</td>
+      </tr>
+      <tr>
+        <td>primary key</td>
+        <td><code>_id</code>, обычно <code>ObjectId</code></td>
+      </tr>
+      </tbody>
+      </table>
+    </div>
+    <p>MongoDB не отменяет схему: вход API проверяет Pydantic, а база использует индексы и при необходимости validators. Правильнее говорить <b>schema-flexible</b>, а не schema-less.</p>
+    <hr>
+
+    <h2>Документ product_attributes</h2>
+    <pre class="language-json"><code>{
+  "_id": {"$oid": "6697bbef47e2631f1492be5a"},
+  "product_id": 42,
+  "attributes": {
+    "switch": "brown",
+    "layout": "ANSI",
+    "wireless": false,
+    "connection": "USB-C"
+  },
+  "created_at": {"$date": "2026-07-21T12:00:00Z"},
+  "updated_at": {"$date": "2026-07-21T12:00:00Z"}
+}
+</code></pre>
+    <ul>
+      <li><code>product_id</code> ссылается на товар в PostgreSQL на уровне приложения;</li>
+      <li><code>attributes</code> содержит небольшие скалярные значения;</li>
+      <li>на один товар допускаем не более одного документа;</li>
+      <li>MongoDB не может создать настоящий ForeignKey к PostgreSQL.</li>
+    </ul>
+    <hr>
+
+    <h2>Базовый CRUD в mongosh</h2>
+    <pre class="language-javascript"><code>db.product_attributes.insertOne({
+  product_id: 42,
+  attributes: {
+    layout: "ANSI",
+    wireless: false
+  }
+})
+
+db.product_attributes.findOne({product_id: 42})
+
+db.product_attributes.updateOne(
+  {product_id: 42},
+  {$set: {"attributes.wireless": true}}
+)
+
+db.product_attributes.deleteOne({product_id: 42})
+</code></pre>
+    <p>После имени collection вызывается операция. У <code>findOne</code> и <code>deleteOne</code> объект задаёт фильтр. У <code>updateOne</code> первый объект выбирает документ, а второй описывает изменение.</p>
+    <p>Это команды интерактивной оболочки <code>mongosh</code>. Позже те же операции через PyMongo Async будем вызывать с <code>await</code>.</p>
+    <hr>
+
+    <h2>Фильтры, projection и операторы</h2>
+    <pre class="language-javascript"><code>db.product_attributes.find(
+  {
+    "attributes.refresh_rate": {$gte: 120},
+    "attributes.color": {$in: ["black", "white"]}
+  },
+  {
+    _id: 0,
+    product_id: 1,
+    "attributes.refresh_rate": 1
+  }
+).sort({"attributes.refresh_rate": -1}).limit(10)
+
+db.product_attributes.updateOne(
+  {product_id: 42},
+  {$unset: {"attributes.connection": ""}}
+)
+</code></pre>
+    <ul>
+      <li><code>$gte</code>, <code>$gt</code>, <code>$lte</code>, <code>$lt</code> сравнивают значения;</li>
+      <li><code>$in</code> проверяет вхождение в набор;</li>
+      <li>projection оставляет только нужные поля;</li>
+      <li><code>$set</code>, <code>$unset</code> и <code>$inc</code> изменяют документ.</li>
+    </ul>
+    <hr>
+
+    <h2>От SQL к синтаксису MongoDB</h2>
+    <table>
+      <thead>
+      <tr>
+        <th>SQL</th>
+        <th>MongoDB</th>
+      </tr>
+      </thead>
+      <tbody>
+      <tr>
+        <td><code>SELECT * FROM product_attributes</code></td>
+        <td><code>db.product_attributes.find({})</code></td>
+      </tr>
+      <tr>
+        <td><code>WHERE product_id = 42</code></td>
+        <td><code>{product_id: 42}</code></td>
+      </tr>
+      <tr>
+        <td><code>SELECT product_id</code></td>
+        <td><code>{product_id: 1, _id: 0}</code></td>
+      </tr>
+      <tr>
+        <td><code>UPDATE ... SET</code></td>
+        <td><code>updateOne(filter, {$set: changes})</code></td>
+      </tr>
+      <tr>
+        <td><code>DELETE ... WHERE</code></td>
+        <td><code>deleteOne(filter)</code></td>
+      </tr>
+      <tr>
+        <td><code>CREATE UNIQUE INDEX</code></td>
+        <td><code>createIndex(keys, {unique: true})</code></td>
+      </tr>
+      </tbody>
+    </table>
+    <p>MongoDB-запрос состоит из обычных вложенных объектов. Но операции выполняются над документом целиком или его путями, а не над строками и колонками таблицы.</p>
+    <hr>
+
+    <h2>Reference между базами, embedding внутри документа</h2>
+    <div class="mermaid">
+      flowchart LR
+      subgraph PG["PostgreSQL"]
+        P["Product<br/>id = 42"] -->|"category_id"| C["Category"]
+      end
+      subgraph MDB["MongoDB"]
+        PA["ProductAttributes<br/>product_id = 42"] --> A["attributes {...}"]
+      end
+      P -. "application-level reference" .-> PA
+    </div>
+    <p>Между базами хранится обычный <code>product_id</code>. Внутри Mongo-документа характеристики embedded, потому что они читаются вместе и принадлежат одному товару.</p>
+    <p>Не переносим в MongoDB весь Product: цена, остаток и категория уже защищены SQL-ограничениями и участвуют в существующих операциях проекта.</p>
+    <p>Существующий <code>Product.specs</code> оставляем для небольшого общего контракта: вес, цвет и теги. В <code>product_attributes</code> храним только изменчивые поля конкретной категории, например тип переключателей клавиатуры или частоту обновления монитора. Одну характеристику не дублируем в двух базах.</p>
+    <hr>
+
+    <h2>Архитектура проекта</h2>
+    <div class="mermaid">
+      flowchart LR
+        F["FastAPI"] --> PRODUCT_API["/products"]
+        PRODUCT_API --> SA["SQLAlchemy"]
+        SA --> PG[("PostgreSQL")]
+        F --> ATTR_API["/products/{id}/attributes"]
+        ATTR_API --> CHECK["ProductDep"]
+        CHECK --> PG
+        ATTR_API --> PM["PyMongo Async"]
+        PM --> MDB[("MongoDB")]
+    </div>
+    <p>Сначала <code>ProductDep</code> проверяет существование товара в PostgreSQL. Затем endpoint читает или изменяет только MongoDB-документ с его расширенными характеристиками.</p>
+    <hr>
+
+    <h2>MongoDB в Docker Compose</h2>
+    <p><b><code>docker-compose.yml</code></b></p>
+    <pre class="language-yaml code-compact"><code>services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: products
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "postgres"]
+      interval: 3s
+      timeout: 2s
+      retries: 5
+
+  mongo:
+    image: mongo:8.0
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: mongo
+      MONGO_INITDB_ROOT_PASSWORD: mongo
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  postgres_data:
+  mongo_data:
+</code></pre>
+    <pre class="language-bash"><code>docker compose up -d mongo
+docker compose ps
+</code></pre>
+    <hr>
+
+    <h2>Настройки и PyMongo Async</h2>
+    <pre class="language-bash"><code>uv add pymongo
+</code></pre>
+    <p><b><code>app/core/config.py</code></b>: добавьте два поля в существующий класс <code>Settings</code>.</p>
+    <pre class="language-python"><code>mongodb_url: str | None = None
+mongodb_database: str = "products"
+</code></pre>
+    <p><b><code>.env</code></b></p>
+    <pre class="language-properties"><code>MONGODB_URL=mongodb://mongo:mongo@localhost:27017/?authSource=admin
+MONGODB_DATABASE=products
+</code></pre>
+    <p>Motor больше не используем. Асинхронный драйвер предоставляет официальный <code>AsyncMongoClient</code> из PyMongo.</p>
+    <hr>
+
+    <h2>Один клиент на lifespan</h2>
+    <p><b><code>app/lifespan.py</code></b></p>
+    <pre class="language-python code-compact"><code>from contextlib import asynccontextmanager
+from typing import AsyncIterator
+
+from fastapi import FastAPI
+from pymongo import AsyncMongoClient
+from sqlalchemy import select
+
+from app.database import create_database_engine, create_session_factory
+from app.models import User
+from app.mongodb import ensure_product_attribute_indexes
+from app.security import hash_password
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI) -&gt; AsyncIterator[None]:
+    settings = app.state.settings
+    engine = create_database_engine(settings.database_url)
+    app.state.engine = engine
+    app.state.session_factory = create_session_factory(engine)
+
+    mongo_client: AsyncMongoClient | None = None
+    app.state.mongo_database = None
+
+    try:
+        if settings.admin_username is not None:
+            password = settings.admin_password
+            if password is None:
+                raise RuntimeError(
+                    "Bootstrap admin password is not configured"
+                )
+            with app.state.session_factory() as session:
+                admin = session.scalar(
+                    select(User).where(
+                        User.username == settings.admin_username
+                    )
+                )
+                if admin is None:
+                    session.add(User(
+                        username=settings.admin_username,
+                        role="admin",
+                        hashed_password=hash_password(
+                            password.get_secret_value()
+                        ),
+                    ))
+                    session.commit()
+
+        if settings.mongodb_url is not None:
+            mongo_client = AsyncMongoClient(
+                settings.mongodb_url,
+                tz_aware=True,
+            )
+            await mongo_client.admin.command("ping")
+            app.state.mongo_database = mongo_client[
+                settings.mongodb_database
+            ]
+            await ensure_product_attribute_indexes(
+                app.state.mongo_database
+            )
+
+        yield
+    finally:
+        if mongo_client is not None:
+            await mongo_client.close()
+        engine.dispose()
+</code></pre>
+    <p><code>AsyncMongoClient</code> создаётся один раз внутри event loop приложения, управляет пулом соединений и закрывается при shutdown. Параметр <code>tz_aware=True</code> сохраняет UTC timezone у дат после чтения BSON.</p>
+    <hr>
+
+    <h2>Зависимость и router</h2>
+    <p><b><code>app/dependencies.py</code></b></p>
+    <pre class="language-python"><code>from pymongo.asynchronous.database import AsyncDatabase
+
+
+def get_mongo_database(request: Request) -&gt; AsyncDatabase:
+    database = request.app.state.mongo_database
+    if database is None:
+        raise HTTPException(
+            status_code=503,
+            detail="MongoDB is unavailable",
+        )
+    return database
+
+
+MongoDatabaseDep = Annotated[
+    AsyncDatabase,
+    Depends(get_mongo_database),
+]
+</code></pre>
+    <p><b><code>app/main.py</code></b></p>
+    <pre class="language-python"><code>from app.routers import auth, categories, main, product_attributes, products
+
+
+application.include_router(
+    product_attributes.router,
+    prefix=settings.api_prefix,
+)
+</code></pre>
+    <p>Если MongoDB не настроена, существующие SQL-endpoints продолжают работать, а endpoints характеристик отвечают <code>503</code>.</p>
+    <hr>
+
+    <h2>Схемы и ObjectId</h2>
+    <p><b><code>app/schemas.py</code></b></p>
+    <pre class="language-python"><code>from datetime import datetime
+
+
+AttributeValue = str | int | float | bool
+
+
+class ProductAttributesPut(BaseModel):
+    attributes: dict[str, AttributeValue] = Field(
+        min_length=1,
+        max_length=50,
+    )
+
+    @field_validator("attributes")
+    @classmethod
+    def validate_keys(cls, value):
+        if any("." in key or key.startswith("$") for key in value):
+            raise ValueError("Недопустимое имя характеристики")
+        return value
+
+
+class ProductAttributesPatch(ProductAttributesPut):
+    pass
+
+
+class ProductAttributesRead(ProductAttributesPut):
+    id: str
+    product_id: int
+    created_at: datetime
+    updated_at: datetime
+</code></pre>
+    <p>MongoDB хранит настоящий <code>ObjectId</code>, но HTTP API возвращает его как строку. Клиенту не нужно знать детали BSON.</p>
+    <hr>
+
+    <h2>Преобразование документа</h2>
+    <p><b><code>app/routers/product_attributes.py</code></b></p>
+    <pre class="language-python"><code>from typing import Any, Mapping
+
+
+def attributes_to_read(
+    document: Mapping[str, Any],
+) -&gt; ProductAttributesRead:
+    payload = dict(document)
+    payload["id"] = str(payload.pop("_id"))
+    return ProductAttributesRead.model_validate(payload)
+</code></pre>
+    <p>Преобразование сосредоточено в одной функции. В остальных endpoint не размазываем ручную работу с <code>_id</code>.</p>
+    <hr>
+
+    <h2>Создать или заменить характеристики</h2>
+    <p><b><code>app/routers/product_attributes.py</code></b></p>
+    <pre class="language-python"><code>from datetime import UTC, datetime
+
+from fastapi import APIRouter
+from pymongo import ReturnDocument
+
+
+router = APIRouter(
+    prefix="/products",
+    tags=["Product attributes"],
+)
+
+
+@router.put(
+    "/{product_id}/attributes",
+    response_model=ProductAttributesRead,
+)
+async def put_product_attributes(
+    product: ProductDep,
+    payload: ProductAttributesPut,
+    database: MongoDatabaseDep,
+    _admin: AdminRoleDep,
+) -&gt; ProductAttributesRead:
+    now = datetime.now(UTC)
+    document = await database["product_attributes"].find_one_and_update(
+        {"product_id": product.id},
+        {
+            "$set": {
+                "attributes": payload.attributes,
+                "updated_at": now,
+            },
+            "$setOnInsert": {"created_at": now},
+        },
+        upsert=True,
+        return_document=ReturnDocument.AFTER,
+    )
+    return attributes_to_read(document)
+</code></pre>
+    <p><code>PUT</code> идемпотентен: первый запрос создаёт документ, следующие полностью заменяют набор характеристик. <code>ProductDep</code> не позволяет добавить их несуществующему товару.</p>
+    <hr>
+
+    <h2>Получение характеристик</h2>
+    <pre class="language-python"><code>@router.get(
+    "/{product_id}/attributes",
+    response_model=ProductAttributesRead,
+)
+async def get_product_attributes(
+    product: ProductDep,
+    database: MongoDatabaseDep,
+) -&gt; ProductAttributesRead:
+    document = await database["product_attributes"].find_one(
+        {"product_id": product.id}
+    )
+    if document is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Характеристики товара не найдены",
+        )
+    return attributes_to_read(document)
+</code></pre>
+    <p>Основной <code>GET /products/{product_id}</code> остаётся быстрым SQL-endpoint. Расширенные характеристики клиент запрашивает отдельно только тогда, когда они нужны.</p>
+    <hr>
+
+    <h2>Частичное изменение и удаление</h2>
+    <pre class="language-python code-compact"><code>@router.patch(
+    "/{product_id}/attributes",
+    response_model=ProductAttributesRead,
+)
+async def patch_product_attributes(
+    product: ProductDep,
+    payload: ProductAttributesPatch,
+    database: MongoDatabaseDep,
+    _admin: AdminRoleDep,
+) -&gt; ProductAttributesRead:
+    changes = {
+        f"attributes.{key}": value
+        for key, value in payload.attributes.items()
+    }
+    changes["updated_at"] = datetime.now(UTC)
+    document = await database["product_attributes"].find_one_and_update(
+        {"product_id": product.id},
+        {"$set": changes},
+        return_document=ReturnDocument.AFTER,
+    )
+    if document is None:
+        raise HTTPException(404, "Характеристики не найдены")
+    return attributes_to_read(document)
+
+
+@router.delete("/{product_id}/attributes", status_code=204)
+async def delete_product_attributes(
+    product: ProductDep,
+    database: MongoDatabaseDep,
+    _admin: AdminRoleDep,
+) -&gt; None:
+    result = await database["product_attributes"].delete_one(
+        {"product_id": product.id}
+    )
+    if result.deleted_count == 0:
+        raise HTTPException(404, "Характеристики не найдены")
+</code></pre>
+    <p>PATCH обновляет только переданные ключи через dotted paths. Проверка имён в Pydantic не позволяет превратить пользовательский ключ в оператор MongoDB.</p>
+    <hr>
+
+    <h2>Индекс поддерживает контракт «один товар — один документ»</h2>
+    <p><b><code>app/mongodb.py</code></b></p>
+    <pre class="language-python"><code>from pymongo.asynchronous.database import AsyncDatabase
+
+
+async def ensure_product_attribute_indexes(
+    database: AsyncDatabase,
+) -&gt; None:
+    await database["product_attributes"].create_index(
+        "product_id",
+        unique=True,
+        name="uq_product_attributes_product_id",
+    )
+</code></pre>
+    <pre class="language-javascript"><code>db.product_attributes
+  .find({product_id: 42})
+  .explain("executionStats")
+</code></pre>
+    <p>Уникальный индекс одновременно ускоряет основной запрос и защищает от двух документов для одного товара. Индексы на отдельные характеристики добавляем только под реальные фильтры.</p>
+    <hr>
+
+    <h2>Атомарность и транзакции</h2>
+    <ul>
+      <li>PUT, PATCH и DELETE меняют один MongoDB-документ и атомарны;</li>
+      <li>мультидокументная транзакция для этого CRUD не нужна;</li>
+      <li>такие транзакции требуют replica set или sharded cluster;</li>
+      <li>учебный standalone-контейнер этой лекции их не поддерживает.</li>
+    </ul>
+    <p>Правильная граница документа часто заменяет транзакцию между несколькими коллекциями. Не усложняем инфраструктуру без требования.</p>
+    <hr>
+
+    <h2>Между PostgreSQL и MongoDB нет общей транзакции</h2>
+    <div class="mermaid">
+      sequenceDiagram
+        participant API as FastAPI
+        participant PG as PostgreSQL
+        participant OUT as Outbox Worker
+        participant B as Message Broker
+        participant MDB as MongoDB
+        API->>PG: product deleted + outbox event
+        PG-->>API: один commit
+        OUT->>PG: прочитать событие
+        OUT->>B: опубликовать
+        B->>MDB: удалить product_attributes
+    </div>
+    <p>Удаление Product сейчас не может атомарно удалить MongoDB-документ. До появления outbox потерянные attributes допустимы: они не видны через API, потому что каждый endpoint сначала проверяет <code>ProductDep</code>. Надёжную очистку реализуем после знакомства с брокером сообщений.</p>
+    <hr>
+
+    <h2>Как тестировать</h2>
+    <table>
+      <thead>
+      <tr>
+        <th>Что проверяем</th>
+        <th>Среда</th>
+      </tr>
+      </thead>
+      <tbody>
+      <tr>
+        <td>Pydantic и запрещённые ключи <code>.</code>/<code>$</code></td>
+        <td>unit-тесты</td>
+      </tr>
+      <tr>
+        <td>PUT, GET, PATCH и DELETE</td>
+        <td>отдельная MongoDB test database</td>
+      </tr>
+      <tr>
+        <td>unique index и BSON-поведение</td>
+        <td>реальный MongoDB-контейнер</td>
+      </tr>
+      <tr>
+        <td>несуществующий Product и проверка admin</td>
+        <td>FastAPI integration tests</td>
+      </tr>
+      <tr>
+        <td>существующие products/auth</td>
+        <td>MongoDB выключена</td>
+      </tr>
+      </tbody>
+    </table>
+    <p>Минимальный сценарий: создать характеристики, получить их, изменить один ключ, удалить документ и убедиться, что повторное чтение возвращает <code>404</code>.</p>
+    <hr>
+
+    <h2>Практика</h2>
+    <ol>
+      <li>Добавить MongoDB в Compose и настройки приложения.</li>
+      <li>Подключить <code>AsyncMongoClient</code> в существующий lifespan.</li>
+      <li>Создать схемы и router <code>product_attributes</code>.</li>
+      <li>Реализовать PUT, GET, PATCH и DELETE.</li>
+      <li>Создать уникальный индекс по <code>product_id</code>.</li>
+      <li>Проверить CRUD интеграционными тестами.</li>
+    </ol>
+    <p><b>Дополнительно:</b> реализовать удаление одной характеристики через оператор <code>$unset</code>.</p>
+    <hr>
+
+    <h2>Итоги</h2>
+    <ul>
+      <li>PostgreSQL хранит обязательные и транзакционные данные Product.</li>
+      <li>MongoDB хранит необязательные характеристики с разной структурой.</li>
+      <li><code>product_id</code> — ссылка уровня приложения, а не ForeignKey.</li>
+      <li>Pydantic ограничивает вход, а unique index защищает модель хранения.</li>
+      <li>PyMongo Async подключается один раз через lifespan.</li>
+      <li>Удаление между двумя базами потребует eventual consistency и outbox.</li>
+    </ul>
+    <p>Следующая тема — Redis: кэширование, TTL, rate limiting и данные с коротким жизненным циклом.</p>
+    <hr>
+  </db-content>
+</div>
+<script>
+  window.addEventListener("load", () => {
+    const container = document.querySelector(".slide-container");
+    if (container && window.innerWidth < 1100) {
+      container.classList.add("menu-collapsed");
+    }
+
+    const buttons = document.querySelectorAll("#slide-navigation button");
+    if (buttons.length === 2) {
+      buttons[0].textContent = "← Назад";
+      buttons[0].setAttribute("aria-label", "Предыдущий слайд");
+      buttons[1].textContent = "Далее →";
+      buttons[1].setAttribute("aria-label", "Следующий слайд");
+    }
+
+    const menuToggle = document.querySelector("#menu-toggle");
+    if (menuToggle) {
+      menuToggle.setAttribute("aria-label", "Открыть или скрыть меню слайдов");
+      menuToggle.setAttribute("title", "Меню слайдов");
+    }
+  });
+</script>
+</body>
+</html>

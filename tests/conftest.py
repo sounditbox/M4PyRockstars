@@ -42,6 +42,7 @@ def app(tmp_path: Path) -> FastAPI:
         jwt_secret_key="test-secret-not-for-production-use-only",
         admin_username=None,
         admin_password=None,
+        mongodb_url=None,
     )
 
     run_migrations(settings.database_url)

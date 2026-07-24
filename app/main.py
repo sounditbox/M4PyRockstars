@@ -3,7 +3,7 @@ from fastapi import FastAPI
 from app.core.config import Settings
 from app.dependencies import get_settings
 from app.lifespan import lifespan
-from app.routers import products, main, auth, categories
+from app.routers import auth, categories, main, product_attributes, products
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -30,6 +30,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     application.include_router(
         auth.router,
+        prefix=settings.api_prefix,
+    )
+    application.include_router(
+        product_attributes.router,
         prefix=settings.api_prefix,
     )
     return application

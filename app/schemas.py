@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import Annotated, Self, Literal
+from datetime import datetime
+from typing import Annotated, Self, Literal, Union
 
 from pydantic import BaseModel, Field, ConfigDict, field_validator, \
     model_validator
@@ -23,6 +24,34 @@ CategorySlug = Annotated[
     str,
     Field(min_length=2, max_length=40, pattern=r"^[a-z0-9-]+$"),
 ]
+
+
+AttributeValue = Union[str, int, float, bool, None]
+
+
+class ProductAttributesPut(BaseModel):
+    attributes: dict[str, AttributeValue] = Field(
+        min_length=1,
+        max_length=50,
+    )
+
+    @field_validator("attributes")
+    @classmethod
+    def validate_keys(cls, value):
+        if any("." in key or key.startswith("$") for key in value):
+            raise ValueError("Недопустимое имя характеристики")
+        return value
+
+
+class ProductAttributesPatch(ProductAttributesPut):
+    pass
+
+
+class ProductAttributesRead(ProductAttributesPut):
+    id: str
+    product_id: int
+    created_at: datetime
+    updated_at: datetime
 
 
 class CategoryBase(BaseModel):

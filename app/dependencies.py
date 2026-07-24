@@ -6,6 +6,7 @@ from fastapi import Depends, Path, HTTPException
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from jwt import InvalidTokenError
 from pydantic import ValidationError
+from pymongo.asynchronous.database import AsyncDatabase
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 from starlette.requests import Request
@@ -17,11 +18,25 @@ from app.models import Product, Category, User
 from app.schemas import ProductRead, UserRead, TokenPayload
 
 
+def get_mongo_database(request: Request) -> AsyncDatabase:
+    database = request.app.state.mongo_database
+    if database is None:
+        raise HTTPException(
+            status_code=503,
+            detail="MongoDB is unavailable",
+        )
+    return database
+
+
+MongoDatabaseDep = Annotated[
+    AsyncDatabase,
+    Depends(get_mongo_database),
+]
 
 
 def get_product_or_404(
-    product_id: Annotated[int, Path(ge=1)],
-    session: SessionDep,
+        product_id: Annotated[int, Path(ge=1)],
+        session: SessionDep,
 ) -> Product:
     statement = (
         select(Product)
@@ -35,6 +50,7 @@ def get_product_or_404(
             detail="Товар не найден",
         )
     return product
+
 
 @lru_cache
 def get_settings() -> Settings:
