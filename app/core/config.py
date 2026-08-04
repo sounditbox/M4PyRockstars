@@ -19,6 +19,9 @@ class Settings(BaseSettings):
     redis_url: str | None = None
     product_cache_ttl_seconds: int = 60
     auth_rate_limit_per_minute: int = 5
+    rabbitmq_url: str | None = None
+    celery_broker_url: str = "amqp://guest:guest@localhost:5672//"
+    celery_result_backend: str = "redis://localhost:6379/1"
 
     @model_validator(mode="after")
     def validate_admin(self) -> Self:

@@ -9,6 +9,7 @@ from redis.asyncio import Redis
 from sqlalchemy import select
 
 from app.database import create_database_engine, create_session_factory
+from app.messaging import RabbitPublisher
 from app.models import User
 from app.mongodb import ensure_product_attribute_indexes
 from app.security import hash_password
@@ -30,6 +31,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     redis_client: Redis | None = None
     app.state.redis = None
 
+    rabbit_publisher: RabbitPublisher | None = None
+    app.state.rabbit_publisher = None
+
     settings = app.state.settings
     try:
         if settings.redis_url is not None:
@@ -39,6 +43,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             )
             await redis_client.ping()
             app.state.redis = redis_client
+
+        if settings.rabbitmq_url is not None:
+            rabbit_publisher = await RabbitPublisher.connect(
+                settings.rabbitmq_url
+            )
+            app.state.rabbit_publisher = rabbit_publisher
 
         if settings.admin_username is not None:
             password = settings.admin_password
@@ -76,6 +86,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             )
         yield
     finally:
+        if rabbit_publisher is not None:
+            await rabbit_publisher.close()
         if redis_client is not None:
             await redis_client.aclose()
         if mongo_client is not None:

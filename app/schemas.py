@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Annotated, Self, Literal, Union
+from typing import Annotated, Any, Self, Literal, Union
 
 from pydantic import BaseModel, Field, ConfigDict, field_validator, \
     model_validator
@@ -161,3 +161,26 @@ class TokenPayload(BaseModel):
     exp: int
     iat: int
     type: Literal["access"]
+
+
+class ProductEventAccepted(BaseModel):
+    event_id: str
+    routing_key: str
+
+
+class ProductReportRequest(BaseModel):
+    category_slug: CategorySlug | None = None
+    only_available: bool = True
+    limit: int = Field(default=100, ge=1, le=500)
+
+
+class TaskAccepted(BaseModel):
+    task_id: str
+    status: str
+
+
+class TaskStatus(TaskAccepted):
+    ready: bool
+    successful: bool | None = None
+    result: Any | None = None
+    error: str | None = None

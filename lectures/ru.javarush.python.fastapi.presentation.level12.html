@@ -1,0 +1,238 @@
+<!doctype html>
+<html lang="ru" class="light">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link href="https://super-dev-styles.github.io/website-assets/styles.css" rel="stylesheet">
+    <link href="https://super-dev-styles.github.io/website-assets/view.css" rel="stylesheet">
+    <link href="https://super-dev-styles.github.io/website-assets/slides.css" rel="stylesheet">
+    <script src="https://super-dev-styles.github.io/website-assets/slides.js" defer></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism.min.css" rel="stylesheet"/>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/plugins/line-numbers/prism-line-numbers.min.css" rel="stylesheet"/>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-core.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/plugins/autoloader/prism-autoloader.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/plugins/line-numbers/prism-line-numbers.min.js"></script>
+    <link href="https://super-dev-styles.github.io/website-assets/styles.css" rel="stylesheet">
+    <link href="https://super-dev-styles.github.io/website-assets/view.css" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+  <script>mermaid.initialize({ startOnLoad: false });</script>
+  <title>Уровень 12: Асинхронные очереди сообщений и RabbitMQ</title>
+</head>
+<body>
+<div class="content lecture-content post-content">
+  <db-content>
+    <h1>Уровень 12: Асинхронные очереди сообщений и RabbitMQ</h1>
+      <p>Синхронные REST API могут стать узким местом, когда операции требуют много времени, делая ваше приложение неотзывчивым и затрудняя масштабирование. Мы погрузимся в мир <b>асинхронных очередей сообщений</b>, которые позволяют сервисам взаимодействовать независимо, и сфокусируемся на <b>RabbitMQ</b> — одном из самых надёжных брокеров сообщений.</p>
+      <p>Вы поймёте, зачем очереди нужны для выполнения фоновых задач, разберёте ключевые компоненты RabbitMQ (обменники, очереди, продюсеры, консьюмеры) и различные типы обменников для гибкой маршрутизации сообщений. Мы научимся устанавливать и настраивать RabbitMQ, а затем интегрируем его с FastAPI с помощью асинхронной библиотеки <b><code>aio-pika</code></b>, создавая надёжных продюсеров и консьюмеров, способных обрабатывать данные без потери даже при перезапусках.</p>
+    <hr>
+    <h2>Что такое очереди сообщений и зачем они нужны?</h2>
+    <p><b>Очередь сообщений</b> — это механизм асинхронного взаимодействия между компонентами системы (сервисами). Один компонент, <b>продюсер (Producer)</b>, отправляет сообщение (задачу) в очередь, не дожидаясь ее выполнения. Другой компонент, <b>консьюмер (Consumer)</b>, забирает это сообщение из очереди и обрабатывает его в своем темпе.</p>
+    <p><b>Зачем это нужно?</b></p>
+    <ul>
+      <li><b>асинхронность:</b> ваш основной сервис (например, FastAPI) не "зависает" на долгих задачах. Он быстро отвечает пользователю "задача принята", а реальная работа происходит в фоне.</li>
+      <li><b>масштабируемость:</b> если задачи накапливаются, вы можете просто запустить больше консьюмеров для "разгребания" очереди.</li>
+      <li><b>отказоустойчивость:</b> если консьюмер падает, сообщение остается в очереди и будет обработано позже или другим консьюмером. Если падает продюсер, консьюмеры продолжают работать с тем, что есть в очереди.</li>
+      <li><b>развязка сервисов:</b> продюсер и консьюмер ничего не знают друг о друге, кроме формата сообщения. Их можно разрабатывать, обновлять и развертывать независимо.</li>
+    </ul>
+    <p><b>Принцип работы очереди</b></p>
+    <div class="mermaid">
+      graph TD
+      A[Продюсер] -- 1 Отправляет сообщение --> B(Очередь Сообщений);
+      B -- 2 Хранит сообщения --> B;
+      B -- 3 Отдает сообщение --> C["Консьюмер(Воркер)"];
+      C -- 4 Обрабатывает сообщение --> D(Выполнение задачи);
+
+      style A fill:#ccf,stroke:#333;
+      style C fill:#cfc,stroke:#333;
+    </div>
+    <p>Продюсер и консьюмер не связаны напрямую, а взаимодействуют через очередь.</p>
+    <hr>
+    <h2>Очереди vs REST API</h2>
+    <table>
+      <thead>
+      <tr>
+        <th>Сценарий</th>
+        <th>REST API (Синхронно)</th>
+        <th>Очередь сообщений (Асинхронно)</th>
+      </tr>
+      </thead>
+      <tbody>
+      <tr>
+        <td><b>Взаимодействие</b></td>
+        <td>клиент отправляет запрос и <b>ждет</b> ответа</td>
+        <td>продюсер отправляет сообщение и <b>не ждет</b> его обработки</td>
+      </tr>
+      <tr>
+        <td><b>Время ответа</b></td>
+        <td>равно времени выполнения задачи</td>
+        <td>почти мгновенный ответ ("задача принята")</td>
+      </tr>
+      <tr>
+        <td><b>Пример: генерация отчета</b></td>
+        <td>пользователь нажимает "сгенерировать" и ждет 1 минуту, пока страница "крутится"</td>
+        <td>пользователь нажимает "сгенерировать", видит "отчет будет готов через минуту", и может продолжать работу</td>
+      </tr>
+      <tr>
+        <td><b>Идеально для</b></td>
+        <td>быстрых операций, получения данных (CRUD)</td>
+        <td>долгих, фоновых, ресурсоемких задач</td>
+      </tr>
+      </tbody>
+    </table>
+    <p>Используйте очереди для задач, которые не требуют немедленного ответа: отправка email-рассылок, обработка загруженных файлов, применение AI-моделей, сложные вычисления.</p>
+    <hr>
+    <h2>Введение в RabbitMQ</h2>
+    <p><b>RabbitMQ</b> — это один из самых популярных и надежных <b>брокеров сообщений</b>. Он выступает в роли почтового отделения для сообщений в вашей системе. RabbitMQ реализует протокол <b>AMQP</b> (Advanced Message Queuing Protocol).</p>
+      <img data-max-width="800" data-id="76a85e26-c43c-4073-bd03-afc00b6e1942" src="https://cdn.javarush.com/images/article/76a85e26-c43c-4073-bd03-afc00b6e1942/800.jpeg" alt="">
+      <p><b>Ключевые компоненты RabbitMQ:</b></p>
+    <ul>
+      <li><b>Producer:</b> приложение, которое отправляет сообщения.</li>
+      <li><b>Consumer:</b> приложение, которое получает и обрабатывает сообщения.</li>
+      <li><b>Queue:</b> буфер, который хранит сообщения.</li>
+      <li><b>Exchange:</b> точка входа для сообщений. Продюсер отправляет сообщение именно в обменник, а не напрямую в очередь. Обменник решает, в какие очереди направить сообщение на основе своих правил и типа.</li>
+    </ul>
+    <p><b>Компоненты RabbitMQ</b></p>
+    <div class="mermaid">
+      graph TD
+      P[Producer] -- Сообщение --> E(Exchange);
+      E -- Правило маршрутизации --> Q1[Queue A];
+      E -- Правило маршрутизации --> Q2[Queue B];
+      Q1 --> C1[Consumer 1];
+      Q2 --> C2[Consumer 2];
+
+      style E fill:#f9f,stroke:#333,stroke-width:2px;
+    </div>
+    <p>Продюсер отправляет сообщение в обменник (<code>Exchange</code>), который, как почтовый сортировщик, распределяет его по нужным очередям (<code>Queue</code>).</p>
+    <hr>
+    <h2>Виды обменников в RabbitMQ</h2>
+    <p>Тип обменника определяет его логику маршрутизации сообщений.</p>
+<p><b>Direct:</b></p>
+        <ul>
+          <li><b>принцип:</b> сообщение отправляется в очередь, если <code>routing_key</code> (ключ маршрутизации) сообщения точно совпадает с <code>binding_key</code> (ключ привязки) очереди.</li>
+          <li><b>использование:</b> для точной доставки сообщений конкретному обработчику (unicast).</li>
+        </ul>
+<p><b>Fanout:</b></p>
+        <ul>
+          <li><b>принцип:</b> сообщение отправляется во <i>все</i> привязанные к обменнику очереди, <code>routing_key</code> <b>игнорируется</b>.</li>
+          <li><b>использование:</b> для массовой рассылки сообщений (broadcast), например, для уведомления всех сервисов о событии.</li>
+        </ul>
+<p><b>Topic:</b></p>
+        <ul>
+          <li><b>принцип:</b> сообщение отправляется в очереди, чей <code>binding_key</code> соответствует шаблону <code>routing_key</code> сообщения. Используются <code>*</code> (одно слово) и <code>#</code> (ноль или более слов).</li>
+          <li><b>использование:</b> для гибкой маршрутизации по темам. Пример <code>routing_key</code>: <code>logs.user.error</code>. Пример <code>binding_key</code>: <code>logs.#</code> (получить все логи) или <code>logs.*.error</code> (получить все ошибки).</li>
+        </ul>
+<p><b>Headers:</b></p>
+        <ul>
+          <li><b>принцип:</b> маршрутизация основана на совпадении заголовков (<code>headers</code>) сообщения, а не <code>routing_key</code>.</li>
+          <li><b>использование:</b> для сложных правил маршрутизации, не основанных на строковых ключах.</li>
+        </ul>
+    <hr>
+    <h2>Установка и базовая настройка RabbitMQ</h2>
+    <p><b>1. Установка:</b></p>
+    <ul>
+      <li><p><b>Docker:</b></p>
+        <pre><code class="language-bash"># Запускаем RabbitMQ с веб-интерфейсом управления
+docker run -d --hostname my-rabbit --name some-rabbit -p 5672:5672 -p 15672:15672 rabbitmq:3-management
+</code></pre>
+      </li>
+      <li><b>Локальная установка:</b> требует установки <b>Erlang</b>, а затем RabbitMQ Server.</li>
+    </ul>
+    <p><b>2. Веб-интерфейс (Management Plugin):</b></p>
+    <ul>
+      <li>если вы использовали образ <code>rabbitmq:3-management</code>, интерфейс уже включен.</li>
+      <li><b>доступ:</b> <code>http://localhost:15672</code></li>
+      <li><b>логин/пароль по умолчанию:</b> <code>guest</code> / <code>guest</code></li>
+      <li><b>возможности:</b> просмотр очередей, обменников, соединений; отправка/получение сообщений вручную; управление пользователями и правами доступа.</li>
+    </ul>
+    <p><b>3. Пользователи и права:</b></p>
+    <ul>
+      <li>Пользователь <code>guest</code> по умолчанию может подключаться только с <code>localhost</code>.</li>
+      <li>Для продакшена необходимо создать отдельного пользователя с паролем и назначить ему права на определенные виртуальные хосты (vhosts).</li>
+    </ul>
+    <hr>
+    <h2>Асинхронная интеграция с FastAPI</h2>
+    <p>Для асинхронной работы с RabbitMQ из FastAPI используется библиотека <b><code>aio-pika</code></b>.</p>
+    <p><b>Установка:</b></p>
+    <pre><code class="language-bash">pip install aio-pika
+pip freeze > requirements.txt
+</code></pre>
+    <p><b>Пример асинхронного продюсера (в эндпоинте FastAPI):</b></p>
+    <pre class="language-python"><code>import aio_pika
+from fastapi import FastAPI
+
+app = FastAPI()
+
+@app.post("/send-task/")
+async def send_task_to_queue(message: str):
+    # Подключаемся к RabbitMQ
+    connection = await aio_pika.connect_robust("amqp://guest:guest@localhost/")
+    async with connection:
+        # Создаем канал
+        channel = await connection.channel()
+        # Отправляем сообщение напрямую в очередь (используется обменник по умолчанию)
+        await channel.default_exchange.publish(
+            aio_pika.Message(body=message.encode()),
+            routing_key="hello_queue", # Имя очереди
+        )
+    return {"status": "Сообщение отправлено в очередь"}
+</code></pre>
+    <p><b>Пример асинхронного консьюмера (отдельный скрипт-воркер):</b></p>
+    <pre class="language-python"><code># worker.py
+import asyncio
+import aio_pika
+
+async def main():
+    connection = await aio_pika.connect_robust("amqp://guest:guest@localhost/")
+    async with connection:
+        channel = await connection.channel()
+        # Объявляем очередь (чтобы убедиться, что она существует)
+        queue = await channel.declare_queue("hello_queue", durable=True)
+        # Начинаем слушать очередь
+        async with queue.iterator() as queue_iter:
+            async for message in queue_iter:
+                async with message.process(): # Подтверждает получение сообщения после обработки
+                    print(f"Получено и обработано: {message.body.decode()}")
+
+if __name__ == "__main__":
+    asyncio.run(main())
+</code></pre>
+    <hr>
+    <h2>Надежность: <code>durable</code> очереди и <code>persistent</code> сообщения</h2>
+    <p>По умолчанию, если сервер RabbitMQ перезагрузится, все очереди и сообщения в них <b>пропадут</b>. Чтобы этого избежать, нужно использовать:</p>
+    <ul>
+      <li><p><b>Постоянные (durable) очереди:</b></p>
+        <ul>
+          <li>очередь восстановится после перезагрузки сервера.</li>
+          <li>объявляется с флагом <code>durable=True</code>.</li>
+        </ul>
+        <pre class="language-python"><code>queue = await channel.declare_queue("my_durable_queue", durable=True)
+</code></pre>
+      </li>
+      <li><p><b>Постоянные (persistent) сообщения:</b></p>
+        <ul>
+          <li>сообщение сохранится на диск и переживет перезагрузку.</li>
+          <li>создается с <code>delivery_mode=aio_pika.DeliveryMode.PERSISTENT</code>.</li>
+        </ul>
+        <pre class="language-python"><code>await exchange.publish(
+    aio_pika.Message(
+        body=b"Persistent message",
+        delivery_mode=aio_pika.DeliveryMode.PERSISTENT
+    ),
+    routing_key="my_durable_queue"
+)
+</code></pre>
+      </li>
+    </ul>
+    <div class="lesson-note lesson-note--important">
+          <div class="lesson-note__container">
+              <div class="lesson-note__head">Важно!</div>
+              <div class="lesson-note__content">
+                  <p>Для гарантии доставки нужно использовать <b>подтверждения (acknowledgements)</b>. В <code>aio-pika</code> контекстный менеджер <code>async with message.process():</code> автоматически отправляет подтверждение (<code>ack</code>) после успешного выполнения блока кода. Если в блоке произойдет ошибка, подтверждение не отправится, и RabbitMQ передаст сообщение другому консьюмеру.</p>
+              </div>
+          </div>
+      </div>
+      <hr>
+  </db-content>
+</div>
+</body>
+</html>

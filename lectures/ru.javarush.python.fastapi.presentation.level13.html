@@ -1,0 +1,278 @@
+<!doctype html>
+<html lang="ru" class="light">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link href="https://super-dev-styles.github.io/website-assets/styles.css" rel="stylesheet">
+    <link href="https://super-dev-styles.github.io/website-assets/view.css" rel="stylesheet">
+    <link href="https://super-dev-styles.github.io/website-assets/slides.css" rel="stylesheet">
+    <script src="https://super-dev-styles.github.io/website-assets/slides.js" defer></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism.min.css" rel="stylesheet"/>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/plugins/line-numbers/prism-line-numbers.min.css" rel="stylesheet"/>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-core.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/plugins/autoloader/prism-autoloader.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/plugins/line-numbers/prism-line-numbers.min.js"></script>
+    <link href="https://super-dev-styles.github.io/website-assets/styles.css" rel="stylesheet">
+    <link href="https://super-dev-styles.github.io/website-assets/view.css" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+  <script>mermaid.initialize({ startOnLoad: false });</script>
+  <title>Уровень 13: Celery — асинхронные задачи и планирование</title>
+</head>
+<body>
+<div class="content lecture-content post-content">
+  <db-content>
+    <h1>Уровень 13: Celery — асинхронные задачи и планирование</h1>
+      <p>Выполнение долгих или ресурсоёмких операций напрямую внутри основного потока API неизбежно приводит к блокировкам и ухудшению пользовательского опыта. <b>Celery</b> — это мощная распределённая очередь задач для Python, которая позволяет 'отдавать на сторону' такие операции для выполнения в <b>фоновом режиме</b>, сохраняя отзывчивость вашего API.</p>
+      <p>Мы разберём архитектуру Celery, состоящую из продюсера, брокера и воркеров, и настроим его минимальный запуск с Redis. Вы научитесь интегрировать Celery как с FastAPI, так и с Django, асинхронно ставить задачи в очередь и эффективно отслеживать их состояние.</p>
+      <p>Отдельно рассмотрим незаменимый инструмент мониторинга <b>Flower</b> и возможности планирования задач по расписанию с помощью <b>Celery Beat</b>, что позволит вам создавать масштабируемые и эффективные фоновые процессы.</p>
+    <hr>
+    <h2>Что такое Celery и зачем он нужен?</h2>
+    <p><b>Celery</b> — это распределенная очередь задач для Python. Проще говоря, это инструмент, который позволяет вашему основному приложению (FastAPI/Django) "отдавать на сторону" долгие или ресурсоемкие операции для выполнения в <b>фоновом режиме</b>.</p>
+      <img data-max-width="800" data-id="f638e698-0735-496b-b7cc-295fbca871e0" src="https://cdn.javarush.com/images/article/f638e698-0735-496b-b7cc-295fbca871e0/800.jpeg" alt="">
+      <p><b>Когда это нужно:</b></p>
+    <ul>
+      <li><b>отправка email-уведомлений:</b> API должен ответить "ОК" за миллисекунды, а не ждать 5 секунд, пока почтовый сервер обработает запрос.</li>
+      <li><b>обработка загруженных файлов:</b> сжатие изображений, конвертация видео.</li>
+      <li><b>генерация отчетов:</b> создание сложных PDF или Excel.</li>
+      <li><b>обращение к медленным внешним API.</b></li>
+    </ul>
+    <p>Используя Celery, ваш API остается отзывчивым, а вся тяжелая работа выполняется отдельно, в фоновых процессах-воркерах.</p>
+    <hr>
+    <h2>Архитектура Celery</h2>
+    <p>Система на Celery состоит из трех ключевых частей, взаимодействующих через брокера сообщений.</p>
+    <ol>
+      <li><p><b>Producer:</b></p>
+        <ul>
+          <li>это ваше приложение (FastAPI/Django).</li>
+          <li>его задача — создать задачу и отправить ее посреднику.</li>
+        </ul>
+      </li>
+      <li><p><b>Message Broker:</b></p>
+        <ul>
+          <li>это посредник, обычно <b>Redis</b> или <b>RabbitMQ</b>.</li>
+          <li>он принимает задачи от продюсера и хранит их в очереди.</li>
+        </ul>
+      </li>
+      <li><p><b>Worker:</b></p>
+        <ul>
+          <li>это отдельный Python-процесс, который вы запускаете на сервере.</li>
+          <li>он постоянно следит за очередью, забирает из нее задачи и выполняет их.</li>
+        </ul>
+      </li>
+    </ol>
+    <p><b>(Опционально) Result Backend</b> — место, куда воркеры могут сохранять результаты задач (часто тот же Redis).</p>
+    <p><b>Поток работы</b></p>
+    <div class="mermaid">
+      graph TD
+      A[Клиент] --> B{"FastAPI / Django<br/>(Producer)"};
+      B -- 1 Отправляет задачу task.delay() --> C((Broker<br/>Redis / RabbitMQ));
+      C -- 2 Хранит задачу --> C;
+      C -- 3 Отдает задачу --> D[Celery Worker];
+      D -- 4 Выполняет задачу --> D;
+      D -- 5 Сохраняет результат (опц.) --> E((Result<br/>Backend));
+      B -- 6 Запрашивает результат (опц.) --> E;
+
+      style D fill:#cfc,stroke:#333;
+    </div>
+    <p>Ваше приложение (<code>B</code>) быстро отдает задачу брокеру (<code>C</code>) и отвечает клиенту. Воркер (<code>D</code>) в это время независимо выполняет тяжелую работу.</p>
+    <hr>
+    <h2>Минимальный пример: первый запуск Celery</h2>
+    <p><b>Шаг 1: Установка</b></p>
+    <pre><code class="language-bash">pip install celery "redis[hiredis]"
+</code></pre>
+    <p><b>Шаг 2: Создание файла с задачами (<code>tasks.py</code>)</b></p>
+    <pre class="language-python"><code>from celery import Celery
+import time
+
+# 'tasks' — имя модуля, broker — URL к Redis
+app = Celery('tasks', broker='redis://localhost:6379/0')
+
+@app.task # Декоратор, превращающий функцию в задачу Celery
+def add(x, y):
+    time.sleep(5) # Имитация долгой операции
+    return x + y
+</code></pre>
+    <p><b>Шаг 3: Запуск воркера</b><br>
+      В терминале, в папке с <code>tasks.py</code>, выполните:</p>
+    <pre><code class="language-bash"># -A tasks: указывает на приложение Celery в файле tasks.py
+celery -A tasks worker --loglevel=info
+</code></pre>
+    <p>Воркер подключится к Redis и будет ждать задач.</p>
+    <p><b>Шаг 4: Вызов задачи (из другого терминала)</b></p>
+    <pre class="language-python"><code>>>> from tasks import add
+
+# .delay() — это асинхронный вызов. Он не ждет 5 секунд, а сразу возвращает объект AsyncResult
+>>> result_object = add.delay(4, 6)
+>>> print(result_object.id) # У каждой задачи есть ID
+'a1b2c3d4-e5f6-...'
+</code></pre>
+    <hr>
+    <h2>Интеграция Celery с FastAPI</h2>
+    <p><b>Файл <code>celery_app.py</code>:</b></p>
+    <pre class="language-python"><code>from celery import Celery
+
+# Настраиваем брокер для задач и бэкенд для результатов
+celery_app = Celery(
+    "worker",
+    broker="redis://localhost:6379/0",
+    backend="redis://localhost:6379/1" # Лучше использовать другую базу Redis для результатов
+)
+
+@celery_app.task
+def send_email_task(recipient: str, subject: str):
+    import time
+    time.sleep(10) # Имитация долгой отправки
+    print(f"Письмо на {recipient} с темой '{subject}' отправлено.")
+    return "Success"
+</code></pre>
+    <p><b>Файл <code>main.py</code>:</b></p>
+    <pre class="language-python"><code>from fastapi import FastAPI
+from celery_app import send_email_task
+
+app = FastAPI()
+
+@app.post("/send-email/fast")
+def send_email_fast_route(email: str):
+# .delay() ставит задачу в очередь и не ждет ее выполнения.
+# API ответит мгновенно.
+send_email_task.delay(email, "Быстрый способ")
+return {"status": "Задача по отправке email поставлена в очередь"}
+</code></pre>
+    <p><i>Примечание: для очень простых фоновых задач в FastAPI есть <code>BackgroundTasks</code>, но Celery гораздо мощнее для продакшена, так как работает в отдельных, масштабируемых процессах.</i></p>
+    <hr>
+    <h2>Интеграция Celery с Django</h2>
+    <p>Интеграция с Django требует более формальной настройки, чтобы Celery "знал" о настройках проекта.</p>
+    <p><b>Файл <code>myproject/celery.py</code> (рядом с <code>settings.py</code>):</b></p>
+    <pre class="language-python"><code>import os
+from celery import Celery
+
+os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'myproject.settings')
+app = Celery('myproject')
+# Загружаем конфигурацию из settings.py (переменные с префиксом CELERY_)
+app.config_from_object('django.conf:settings', namespace='CELERY')
+# Автоматически находим файлы tasks.py во всех приложениях
+app.autodiscover_tasks()
+</code></pre>
+    <p><b>Файл <code>myproject/__init__.py</code>:</b></p>
+    <pre class="language-python"><code># Гарантирует, что Celery приложение загрузится при старте Django
+from .celery import app as celery_app
+__all__ = ('celery_app',)
+</code></pre>
+    <p><b>Файл <code>myproject/settings.py</code>:</b></p>
+    <pre class="language-python"><code># Настройки для Celery
+CELERY_BROKER_URL = 'redis://localhost:6379/0'
+CELERY_RESULT_BACKEND = 'redis://localhost:6379/1'
+# ... другие настройки сериализации ...
+</code></pre>
+    <p><b>Файл <code>myapp/tasks.py</code>:</b></p>
+    <pre class="language-python"><code>from celery import shared_task
+
+# @shared_task позволяет создавать задачи без прямого импорта экземпляра Celery
+@shared_task
+def add(x, y):
+    return x + y
+</code></pre>
+    <hr>
+    <h2>Отслеживание задач</h2>
+    <p>Вызов <code>.delay()</code> возвращает объект <code>AsyncResult</code>, который позволяет отслеживать состояние задачи.</p>
+    <p><b>Атрибуты <code>AsyncResult</code>:</b></p>
+    <ul>
+      <li><code>result.id</code>: ID задачи.</li>
+      <li><code>result.status</code>: статус (<code>PENDING</code>, <code>STARTED</code>, <code>SUCCESS</code>, <code>FAILURE</code>).</li>
+      <li><code>result.ready()</code>: <code>True</code>, если задача завершена.</li>
+      <li><code>result.get()</code>: <b>блокирующий</b> метод для получения результата. Если задача упала с ошибкой, <code>.get()</code> вызовет это исключение.</li>
+      <li><code>result.result</code>: результат, если <code>status == 'SUCCESS'</code>.</li>
+      <li><code>result.traceback</code>: traceback, если <code>status == 'FAILURE'</code>.</li>
+    </ul>
+    <p><b>Эндпоинт для проверки статуса:</b></p>
+    <pre class="language-python"><code>from celery.result import AsyncResult
+from celery_app import celery_app # Импортируем экземпляр Celery
+
+@app.get("/tasks/{task_id}")
+def get_task_status(task_id: str):
+    task_result = AsyncResult(task_id, app=celery_app)
+    return {
+        "task_id": task_id,
+        "status": task_result.status,
+        "result": task_result.result if task_result.ready() else None
+    }
+</code></pre>
+    <hr>
+    <h2>Мониторинг и логирование: Flower</h2>
+    <p><b>Flower</b> — это веб-интерфейс для мониторинга и управления Celery. Обязательный инструмент для любого продакшен-проекта.</p>
+      <img data-max-width="1024" data-id="c489141b-e52b-47cf-b984-8b699a1aff99" src="https://cdn.javarush.com/images/article/c489141b-e52b-47cf-b984-8b699a1aff99/1024.jpeg" alt="">
+    <p><b>Установка:</b></p>
+    <pre><code class="language-bash">pip install flower
+</code></pre>
+    <p><b>Запуск:</b></p>
+    <pre><code class="language-bash"># Для FastAPI проекта
+celery -A celery_app flower --port=5555
+
+# Для Django проекта
+celery -A myproject flower --port=5555
+</code></pre>
+    <p><b>Возможности Flower (доступно по <code>http://localhost:5555</code>):</b></p>
+    <ul>
+      <li>просмотр статусов задач в реальном времени.</li>
+      <li>мониторинг нагрузки на воркеры.</li>
+      <li>просмотр деталей задач (аргументы, результат, ошибки).</li>
+      <li>управление задачами (отмена, повторный запуск) и воркерами.</li>
+    </ul>
+    <p><b>Мониторинг с Flower</b></p>
+    <div class="mermaid">
+      graph TD
+      subgraph Celery Экосистема
+      P[Продюсер] --> B((Брокер));
+      B --> W1[Воркер 1];
+      B --> W2[Воркер 2];
+      W1 --> R((Бэкенд Результатов));
+      W2 --> R;
+      end
+      F[Flower UI] -- Мониторит --> B;
+      F -- Мониторит --> W1;
+      F -- Мониторит --> W2;
+      F -- Мониторит --> R;
+      U[Администратор] --> F;
+
+      style F fill:#f9f,stroke:#333;
+    </div>
+    <p>Flower подключается к брокеру и собирает информацию от воркеров, предоставляя вам единый интерфейс для мониторинга всей системы.</p>
+    <hr>
+    <h2>Планирование задач: Celery Beat</h2>
+    <p><b>Celery Beat</b> — это планировщик. Это отдельный процесс, который запускает задачи по расписанию, как <code>cron</code> в Linux.</p>
+    <p><b>Как работает:</b></p>
+    <ul>
+      <li>вы определяете расписание для своих задач.</li>
+      <li>процесс <code>beat</code> в нужный момент отправляет задачу в брокер.</li>
+      <li>свободный <code>worker</code> забирает и выполняет задачу.</li>
+    </ul>
+    <p><b>Способы задания расписания:</b></p>
+    <ol>
+      <li><p><b>В коде (через <code>beat_schedule</code>):</b></p>
+        <pre class="language-python"><code># В файле celery_app.py
+from celery.schedules import crontab
+celery_app.conf.beat_schedule = {
+    'send-report-every-morning': {
+        'task': 'tasks.send_daily_report',
+        'schedule': crontab(hour=8, minute=0), # Каждый день в 8:00
+    },
+}
+</code></pre>
+      </li>
+      <li><p><b>В базе данных (с <code>django-celery-beat</code>):</b></p>
+        <ul>
+          <li>позволяет управлять расписаниями через админпанель Django.</li>
+        </ul>
+      </li>
+    </ol>
+    <p><b>Запуск (нужно 2 процесса + воркеры):</b></p>
+    <pre><code class="language-bash"># Запуск воркеров
+celery -A myproject worker -l info
+# Запуск планировщика
+celery -A myproject beat -l info
+</code></pre>
+      <hr>
+  </db-content>
+</div>
+</body>
+</html>

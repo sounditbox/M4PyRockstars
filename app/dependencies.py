@@ -16,6 +16,7 @@ from starlette.status import HTTP_404_NOT_FOUND, HTTP_403_FORBIDDEN, \
     HTTP_401_UNAUTHORIZED, HTTP_429_TOO_MANY_REQUESTS
 
 from app.core.config import Settings
+from app.messaging import RabbitPublisher
 from app.models import Product, Category, User
 from app.schemas import UserRead, TokenPayload
 
@@ -25,6 +26,16 @@ def get_redis(request: Request) -> Redis | None:
 
 
 RedisDep = Annotated[Optional[Redis], Depends(get_redis)]
+
+
+def get_rabbit_publisher(request: Request) -> RabbitPublisher | None:
+    return request.app.state.rabbit_publisher
+
+
+RabbitPublisherDep = Annotated[
+    RabbitPublisher | None,
+    Depends(get_rabbit_publisher),
+]
 
 
 async def limit_login_attempts(
