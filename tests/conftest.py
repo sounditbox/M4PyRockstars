@@ -43,6 +43,7 @@ def app(tmp_path: Path) -> FastAPI:
         admin_username=None,
         admin_password=None,
         mongodb_url=None,
+        redis_url=None,
     )
 
     run_migrations(settings.database_url)

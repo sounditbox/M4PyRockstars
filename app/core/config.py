@@ -16,6 +16,9 @@ class Settings(BaseSettings):
     admin_password: SecretStr | None = None
     mongodb_url: str | None = None
     mongodb_database: str = "products"
+    redis_url: str | None = None
+    product_cache_ttl_seconds: int = 60
+    auth_rate_limit_per_minute: int = 5
 
     @model_validator(mode="after")
     def validate_admin(self) -> Self:

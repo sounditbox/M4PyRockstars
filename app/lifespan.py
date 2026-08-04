@@ -5,6 +5,7 @@ from typing import AsyncIterator
 
 from fastapi import FastAPI
 from pymongo import AsyncMongoClient
+from redis.asyncio import Redis
 from sqlalchemy import select
 
 from app.database import create_database_engine, create_session_factory
@@ -26,8 +27,19 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     mongo_client: AsyncMongoClient | None = None
     app.state.mongo_database = None
 
+    redis_client: Redis | None = None
+    app.state.redis = None
+
     settings = app.state.settings
     try:
+        if settings.redis_url is not None:
+            redis_client = Redis.from_url(
+                settings.redis_url,
+                decode_responses=True,
+            )
+            await redis_client.ping()
+            app.state.redis = redis_client
+
         if settings.admin_username is not None:
             password = settings.admin_password
             if password is None:
@@ -64,6 +76,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             )
         yield
     finally:
+        if redis_client is not None:
+            await redis_client.aclose()
         if mongo_client is not None:
             await mongo_client.close()
         engine.dispose()

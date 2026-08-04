@@ -1,0 +1,879 @@
+<!doctype html>
+<html lang="ru" class="light">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link href="https://super-dev-styles.github.io/website-assets/styles.css" rel="stylesheet">
+  <link href="https://super-dev-styles.github.io/website-assets/view.css" rel="stylesheet">
+  <link href="https://super-dev-styles.github.io/website-assets/slides.css" rel="stylesheet">
+  <script src="https://super-dev-styles.github.io/website-assets/slides.js" defer></script>
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism.min.css" rel="stylesheet">
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/plugins/line-numbers/prism-line-numbers.min.css" rel="stylesheet">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-core.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/plugins/autoloader/prism-autoloader.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/plugins/line-numbers/prism-line-numbers.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+  <script>mermaid.initialize({ startOnLoad: false });</script>
+<title>Лекция 11: Redis в FastAPI — кэш, TTL и rate limiting</title>
+</head>
+<body>
+<div class="content lecture-content post-content">
+  <db-content>
+    <h1>Лекция 11: Redis в FastAPI — кэш, TTL и rate limiting</h1>
+
+
+<p>В прошлой лекции мы добавили MongoDB для гибких характеристик товара. Теперь подключим Redis для данных с коротким жизненным циклом: кэша, счётчиков и простого ограничения частоты запросов.</p>
+    <p>В Products API кэшируем чтение списка товаров и деталки, инвалидируем кэш после изменений и добавляем rate limit на логин. PostgreSQL остаётся источником истины, Redis помогает быстрее отвечать и защищать API от лишней нагрузки.</p>
+    <hr>
+
+    <h2>Что такое кэширование и зачем оно нужно?</h2>
+<p><b>Кэширование</b> — это сохранение результата дорогой операции в быстром временном хранилище, чтобы не выполнять эту операцию заново при каждом одинаковом запросе.</p>
+    <ul>
+      <li>API отвечает быстрее, потому что часть данных читается из RAM;</li>
+      <li>PostgreSQL получает меньше повторяющихся <code>SELECT</code>-запросов;</li>
+      <li>внешние API и тяжёлые вычисления можно вызывать реже;</li>
+      <li>пользователь чаще видит быстрый ответ, даже если основная база нагружена.</li>
+    </ul>
+    <p>Цена кэша — риск устаревших данных. Поэтому вместе с кэшем всегда обсуждают TTL, ключи и инвалидацию.</p>
+    <hr>
+
+    <h2>Где Redis подходит проекту</h2>
+<table>
+      <thead>
+      <tr>
+        <th>Задача</th>
+        <th>Почему Redis</th>
+        <th>Что сделаем</th>
+      </tr>
+      </thead>
+      <tbody>
+      <tr>
+        <td>частое чтение товаров</td>
+        <td>ключ читается из RAM за миллисекунды</td>
+        <td>кэш для <code>GET /products</code> и <code>GET /products/{id}</code></td>
+      </tr>
+      <tr>
+        <td>устаревание данных</td>
+        <td>у ключей есть TTL</td>
+        <td>кэш сам исчезает через короткое время</td>
+      </tr>
+      <tr>
+        <td>инвалидация после записи</td>
+        <td>ключи можно удалить явно</td>
+        <td>очищаем кэш после POST, PUT, PATCH, DELETE</td>
+      </tr>
+      <tr>
+        <td>ограничение логина</td>
+        <td><code>INCR</code> атомарен</td>
+        <td>счётчик попыток на IP с TTL</td>
+      </tr>
+      </tbody>
+    </table>
+    <p>Redis не заменяет PostgreSQL и MongoDB. Он хранит производные данные, которые можно пересоздать, если кэш пропал.</p>
+    <hr>
+
+    <h2>Redis умеет не только кэш</h2>
+<table>
+      <thead>
+      <tr>
+        <th>Сценарий</th>
+        <th>Как используется</th>
+        <th>Где пригодится</th>
+      </tr>
+      </thead>
+      <tbody>
+      <tr>
+        <td>кэш</td>
+        <td><code>GET</code>, <code>SETEX</code>, TTL</td>
+        <td>быстрые ответы на повторяющиеся GET-запросы</td>
+      </tr>
+      <tr>
+        <td>rate limiting</td>
+        <td><code>INCR</code> + <code>EXPIRE</code></td>
+        <td>ограничение логина, API quota, защита дорогих endpoint</td>
+      </tr>
+      <tr>
+        <td>session storage</td>
+        <td>session id как ключ, данные пользователя как значение</td>
+        <td>серверные сессии, revoke-list, refresh-token state</td>
+      </tr>
+      <tr>
+        <td>backend для очередей</td>
+        <td>Redis как broker/result backend для Celery или RQ</td>
+        <td>фоновые задачи: email, отчёты, обработка файлов</td>
+      </tr>
+      <tr>
+        <td>pub/sub и streams</td>
+        <td>каналы или Redis Streams</td>
+        <td>уведомления, простая передача событий, realtime-сценарии</td>
+      </tr>
+      <tr>
+        <td>distributed locks</td>
+        <td>ключ-блокировка с TTL</td>
+        <td>не запускать одну тяжёлую задачу параллельно</td>
+      </tr>
+      </tbody>
+    </table>
+    <p>В этой лекции берём кэш и rate limiting. Redis как backend для очередей вернётся в блоке про Celery: он удобен для старта, но для сложной маршрутизации и надёжной доставки часто выбирают RabbitMQ.</p>
+    <hr>
+
+    <h2>Кэш — не источник истины</h2>
+<div class="mermaid">
+      flowchart LR
+        API["FastAPI"] --> REDIS[("Redis<br/>быстро, временно")]
+        API --> PG[("PostgreSQL<br/>источник истины")]
+        API --> MDB[("MongoDB<br/>характеристики")]
+        REDIS -. "можно очистить" .-> API
+        PG --> API
+        MDB --> API
+    </div>
+    <p>Если Redis пустой, приложение должно продолжить работать: прочитать данные из PostgreSQL, собрать ответ и снова положить его в кэш.</p>
+    <hr>
+
+    <h2>Cache-aside</h2>
+<ol>
+      <li>API строит ключ по параметрам запроса.</li>
+      <li>Пробует прочитать JSON из Redis.</li>
+      <li>Если ключ найден, возвращает ответ без SQL-запроса.</li>
+      <li>Если ключа нет, читает PostgreSQL, сериализует ответ и кладёт его в Redis с TTL.</li>
+    </ol>
+    <div class="mermaid">
+      flowchart LR
+        A["GET /products"] --> B{"ключ есть в Redis?"}
+        B -- "cache hit" --> C["вернуть JSON из Redis"]
+        B -- "cache miss" --> D["SELECT из PostgreSQL"]
+        D --> E["сериализовать ответ"]
+        E --> F["SETEX key ttl json"]
+        F --> G["вернуть ответ"]
+    </div>
+    <p>Этот паттерн простой и честный: кэш используется только на чтении, а запись остаётся обычной транзакционной операцией в основной базе.</p>
+    <hr>
+
+    <h2>TTL и инвалидация</h2>
+<table>
+      <thead>
+      <tr>
+        <th>Механизм</th>
+        <th>Что делает</th>
+        <th>Когда нужен</th>
+      </tr>
+      </thead>
+      <tbody>
+      <tr>
+        <td><code>TTL</code></td>
+        <td>Redis автоматически удаляет ключ через N секунд</td>
+        <td>данные можно ненадолго устаревать</td>
+      </tr>
+      <tr>
+        <td>явный <code>delete</code></td>
+        <td>приложение удаляет конкретный ключ после изменения данных</td>
+        <td>после PUT, PATCH, DELETE</td>
+      </tr>
+      <tr>
+        <td>namespace version</td>
+        <td>ключи получают новую версию вместо массового удаления</td>
+        <td>когда ключей слишком много</td>
+      </tr>
+      </tbody>
+    </table>
+    <p>На лекции используем TTL плюс явную инвалидацию. Это достаточно понятно и хорошо подходит размеру учебного проекта.</p>
+    <hr>
+
+    <h2>Redis в Docker Compose</h2>
+<p><b><code>docker-compose.yml</code></b></p>
+    <pre class="language-yaml"><code>services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: products
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "postgres"]
+      interval: 3s
+      timeout: 2s
+      retries: 5
+
+  mongo:
+    image: mongo:8.0
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: mongo
+      MONGO_INITDB_ROOT_PASSWORD: mongo
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7.4-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 2s
+      retries: 5
+
+volumes:
+  postgres_data:
+  mongo_data:
+  redis_data:
+</code></pre>
+    <p>Для кэша persistence не обязательна, но volume удобен в локальной разработке: Redis не теряет состояние при обычном пересоздании контейнера.</p>
+    <hr>
+
+    <h2>Зависимость и настройки</h2>
+<pre class="language-bash"><code>uv add "redis[hiredis]"
+</code></pre>
+    <p><b><code>app/core/config.py</code></b>: добавьте поля в существующий <code>Settings</code>.</p>
+    <pre class="language-python"><code>redis_url: str | None = None
+product_cache_ttl_seconds: int = 60
+auth_rate_limit_per_minute: int = 5
+</code></pre>
+    <p><b><code>.env</code></b></p>
+    <pre class="language-properties"><code>REDIS_URL=redis://localhost:6379/0
+PRODUCT_CACHE_TTL_SECONDS=60
+AUTH_RATE_LIMIT_PER_MINUTE=5
+</code></pre>
+    <p>Используем современный пакет <code>redis</code>. Отдельный пакет <code>aioredis</code> больше не нужен.</p>
+    <hr>
+
+    <h2>Async Redis для async products</h2>
+<p>SQLAlchemy в проекте пока синхронная. Её запросы запускаем через <code>run_in_threadpool()</code>, а Redis вызываем напрямую через <code>await</code>. Так синхронный SQL-запрос и сетевой вызов Redis не блокируют event loop.</p>
+    <table>
+      <thead>
+      <tr>
+        <th>Операция</th>
+        <th>Как выполняем</th>
+      </tr>
+      </thead>
+      <tbody>
+      <tr>
+        <td>Синхронная SQLAlchemy</td>
+        <td><code>await run_in_threadpool(query_products, ...)</code></td>
+      </tr>
+      <tr>
+        <td>Redis внутри <code>async def</code></td>
+        <td><code>from redis.asyncio import Redis</code></td>
+      </tr>
+      </tbody>
+    </table>
+    <p>Это промежуточная архитектура: роутеры уже асинхронные, а полный переход PostgreSQL на <code>AsyncSession</code> можно сделать отдельно.</p>
+    <hr>
+
+    <h2>Один Redis-клиент на lifespan</h2>
+<p><b><code>app/lifespan.py</code></b></p>
+    <pre class="language-python"><code>from redis.asyncio import Redis
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI) -&gt; AsyncIterator[None]:
+    settings = app.state.settings
+    engine = create_database_engine(settings.database_url)
+    app.state.engine = engine
+    app.state.session_factory = create_session_factory(engine)
+
+    redis_client: Redis | None = None
+    app.state.redis = None
+
+    try:
+        if settings.redis_url is not None:
+            redis_client = Redis.from_url(
+                settings.redis_url,
+                decode_responses=True,
+            )
+            await redis_client.ping()
+            app.state.redis = redis_client
+
+        # здесь остаётся существующий bootstrap admin и MongoDB
+        yield
+    finally:
+        if redis_client is not None:
+            await redis_client.aclose()
+        engine.dispose()
+</code></pre>
+    <p><code>decode_responses=True</code> возвращает строки вместо bytes. Это удобно для JSON-кэша и счётчиков.</p>
+    <hr>
+
+    <h2>Dependency для Redis</h2>
+<p><b><code>app/dependencies.py</code></b></p>
+    <pre class="language-python"><code>from redis.asyncio import Redis
+
+
+def get_redis(request: Request) -&gt; Redis | None:
+    return request.app.state.redis
+
+
+RedisDep = Annotated[Redis | None, Depends(get_redis)]
+</code></pre>
+    <p>При <code>redis is None</code> кэш и limiter пропускаются: API продолжает работать через PostgreSQL. Это graceful degradation, но без Redis временно исчезает и защита логина.</p>
+    <hr>
+
+    <h2>Ключи должны быть предсказуемыми</h2>
+<pre><code>product:detail:42
+products:list:v3:search=phone:limit=10:category=electronics:available=True
+auth:login:192.168.1.20
+</code></pre>
+    <ul>
+      <li>ключ должен включать все параметры, которые влияют на ответ;</li>
+      <li>одинаковые запросы должны давать одинаковый ключ;</li>
+      <li>у разных endpoint не должно быть случайных пересечений;</li>
+      <li>не кладём в ключи пароли, JWT и другие секреты.</li>
+    </ul>
+    <p>Ключ — часть API-контракта внутри приложения. Если забыть параметр, Redis начнёт отдавать ответ от другого запроса.</p>
+    <hr>
+
+    <h2>Сервис кэша товаров</h2>
+<p><b><code>app/cache.py</code></b></p>
+    <pre class="language-python"><code>from __future__ import annotations
+
+import json
+from typing import Any
+
+from redis.asyncio import Redis
+
+
+PRODUCT_LIST_VERSION_KEY = "products:list:version"
+
+
+async def get_product_list_version(redis: Redis) -&gt; int:
+    version = await redis.get(PRODUCT_LIST_VERSION_KEY)
+    if version is None:
+        return 0
+    return int(version)
+
+
+async def make_product_list_cache_key(
+    redis: Redis,
+    *,
+    search: str | None,
+    limit: int,
+    category_slug: str | None,
+    only_available: bool,
+) -&gt; str:
+    version = await get_product_list_version(redis)
+    return (
+        f"products:list:v{version}:"
+        f"search={search or ''}:"
+        f"limit={limit}:"
+        f"category={category_slug or ''}:"
+        f"available={only_available}"
+    )
+
+
+def make_product_detail_cache_key(product_id: int) -&gt; str:
+    return f"product:detail:{product_id}"
+</code></pre>
+    <p>Начинаем с <code>v0</code>: первая запись увеличит версию до <code>v1</code>, поэтому даже закэшированный пустой список сразу перестанет использоваться. Версия позволяет не удалять много list-ключей по шаблону.</p>
+    <hr>
+
+    <h2>JSON helpers</h2>
+<p><b><code>app/cache.py</code></b></p>
+    <pre class="language-python"><code>async def get_json(redis: Redis, key: str) -&gt; Any | None:
+    value = await redis.get(key)
+    if value is None:
+        return None
+    return json.loads(value)
+
+
+async def set_json(
+    redis: Redis,
+    key: str,
+    value: Any,
+    *,
+    ttl_seconds: int,
+) -&gt; None:
+    await redis.setex(
+        key,
+        ttl_seconds,
+        json.dumps(value, ensure_ascii=False),
+    )
+
+
+async def invalidate_product_cache(
+    redis: Redis | None,
+    *,
+    product_id: int | None = None,
+) -&gt; None:
+    if redis is None:
+        return
+    await redis.incr(PRODUCT_LIST_VERSION_KEY)
+    if product_id is not None:
+        await redis.delete(make_product_detail_cache_key(product_id))
+</code></pre>
+    <p>Кэшируем не ORM-объекты, а уже готовый JSON-совместимый ответ. Так Redis не зависит от внутреннего состояния SQLAlchemy-сессии.</p>
+    <hr>
+
+    <h2>Sync helpers для чтения из PostgreSQL</h2>
+<p><b><code>app/routers/products.py</code></b></p>
+    <pre class="language-python"><code>from sqlalchemy.orm import Session
+
+
+def query_products(
+    session: Session,
+    *,
+    search: str | None,
+    limit: int,
+    category_slug: str | None,
+    only_available: bool,
+) -&gt; list[ProductRead]:
+    statement = (
+        select(Product)
+        .join(Product.category)
+        .options(selectinload(Product.category))
+        .order_by(Category.name, Product.title)
+    )
+    if search:
+        statement = statement.where(
+            Product.title.ilike(f"%{search}%")
+        )
+    statement = statement.where(
+        Product.is_available == only_available
+    )
+    if category_slug:
+        statement = statement.where(
+            Category.slug == category_slug
+        )
+
+    products = session.scalars(statement.limit(limit)).all()
+    return [
+        ProductRead.model_validate(product)
+        for product in products
+    ]
+
+
+def read_product_from_db(
+    session: Session,
+    product_id: int,
+) -&gt; ProductRead:
+    product = get_product_or_404(product_id, session)
+    return ProductRead.model_validate(product)
+</code></pre>
+    <p>Эти функции остаются синхронными и ничего не знают о Redis. Async-endpoint запускает их в thread pool и получает уже готовые Pydantic-модели.</p>
+    <hr>
+
+    <h2>Кэшируем список товаров</h2>
+<p><b><code>app/routers/products.py</code></b></p>
+    <pre class="language-python"><code>from app.cache import (
+    get_json,
+    invalidate_product_cache,
+    make_product_detail_cache_key,
+    make_product_list_cache_key,
+    set_json,
+)
+from app.dependencies import RedisDep, SettingsDep
+from fastapi import Path
+from fastapi.concurrency import run_in_threadpool
+
+
+@router.get("", response_model=list[ProductRead])
+async def list_products(
+    session: SessionDep,
+    redis: RedisDep,
+    settings: SettingsDep,
+    search: SearchParam = None,
+    limit: LimitParam = 10,
+    category_slug: CategorySlugParam = None,
+    only_available: bool = True,
+) -&gt; list[ProductRead]:
+    cache_key = None
+    if redis is not None:
+        cache_key = await make_product_list_cache_key(
+            redis,
+            search=search,
+            limit=limit,
+            category_slug=category_slug,
+            only_available=only_available,
+        )
+        cached = await get_json(redis, cache_key)
+        if cached is not None:
+            return [ProductRead.model_validate(item) for item in cached]
+
+    response = await run_in_threadpool(
+        query_products,
+        session,
+        search=search,
+        limit=limit,
+        category_slug=category_slug,
+        only_available=only_available,
+    )
+    if redis is not None and cache_key is not None:
+        await set_json(
+            redis,
+            cache_key,
+            [item.model_dump(mode="json") for item in response],
+            ttl_seconds=settings.product_cache_ttl_seconds,
+        )
+    return response
+</code></pre>
+    <p><code>query_products()</code> остаётся обычной функцией и возвращает готовые <code>ProductRead</code>. Thread pool не делает SQLAlchemy асинхронной, но не даёт ей блокировать event loop.</p>
+    <hr>
+
+    <h2>Кэшируем деталку</h2>
+<pre class="language-python"><code>@router.get("/{product_id}", response_model=ProductRead)
+async def get_product(
+    product_id: Annotated[int, Path(ge=1)],
+    session: SessionDep,
+    redis: RedisDep,
+    settings: SettingsDep,
+) -&gt; ProductRead:
+    cache_key = make_product_detail_cache_key(product_id)
+    if redis is not None:
+        cached = await get_json(redis, cache_key)
+        if cached is not None:
+            return ProductRead.model_validate(cached)
+
+    response = await run_in_threadpool(
+        read_product_from_db,
+        session,
+        product_id,
+    )
+    if redis is not None:
+        await set_json(
+            redis,
+            cache_key,
+            response.model_dump(mode="json"),
+            ttl_seconds=settings.product_cache_ttl_seconds,
+        )
+    return response
+</code></pre>
+    <p>Кэш деталки проще, чем кэш списка: ключ зависит только от <code>product_id</code>.</p>
+    <hr>
+
+    <h2>Sync helpers для записи в PostgreSQL</h2>
+<p><b><code>app/routers/products.py</code></b></p>
+    <pre class="language-python"><code>def create_product_in_db(
+    session: Session,
+    product_data: ProductCreate,
+) -&gt; ProductRead:
+    category = get_category_or_404(
+        product_data.category_id,
+        session,
+    )
+    product = Product(
+        **product_data.model_dump(
+            mode="json",
+            exclude={"category_id"},
+        ),
+        category=category,
+    )
+    session.add(product)
+    session.commit()
+    return ProductRead.model_validate(
+        get_product_or_404(product.id, session)
+    )
+
+
+def replace_product_in_db(
+    session: Session,
+    product: Product,
+    product_data: ProductCreate,
+) -&gt; ProductRead:
+    category = get_category_or_404(
+        product_data.category_id,
+        session,
+    )
+    for field, value in product_data.model_dump(
+        mode="json",
+        exclude={"category_id"},
+    ).items():
+        setattr(product, field, value)
+    product.category = category
+    session.commit()
+    return ProductRead.model_validate(
+        get_product_or_404(product.id, session)
+    )
+
+
+def update_product_in_db(
+    session: Session,
+    product: Product,
+    product_data: ProductUpdate,
+) -&gt; ProductRead:
+    current = ProductCreate.model_validate(product).model_dump()
+    patch = product_data.model_dump(exclude_unset=True)
+    validated = ProductCreate.model_validate(current | patch)
+    return replace_product_in_db(session, product, validated)
+
+
+def delete_product_from_db(
+    session: Session,
+    product: Product,
+) -&gt; None:
+    session.delete(product)
+    session.commit()
+</code></pre>
+    <p>Commit выполняется внутри sync-helper. Инвалидацию вызываем только после того, как helper успешно завершился.</p>
+    <hr>
+
+    <h2>Инвалидация после POST и PUT</h2>
+<pre class="language-python"><code>@router.post(
+    "",
+    response_model=ProductRead,
+    status_code=HTTP_201_CREATED,
+)
+async def create_product(
+    product_data: ProductCreate,
+    session: SessionDep,
+    redis: RedisDep,
+    _admin: AdminRoleDep,
+) -&gt; ProductRead:
+    response = await run_in_threadpool(
+        create_product_in_db,
+        session,
+        product_data,
+    )
+    await invalidate_product_cache(redis)
+    return response
+
+
+@router.put("/{product_id}", response_model=ProductRead)
+async def replace_product(
+    product: ProductDep,
+    product_data: ProductCreate,
+    session: SessionDep,
+    redis: RedisDep,
+    _admin: AdminRoleDep,
+) -&gt; ProductRead:
+    response = await run_in_threadpool(
+        replace_product_in_db,
+        session,
+        product,
+        product_data,
+    )
+    await invalidate_product_cache(redis, product_id=product.id)
+    return response
+</code></pre>
+    <p>POST увеличивает только версию списков. PUT меняет существующий товар, поэтому дополнительно удаляет его detail-key.</p>
+    <hr>
+
+    <h2>Инвалидация после PATCH и DELETE</h2>
+<pre class="language-python"><code>@router.patch("/{product_id}", response_model=ProductRead)
+async def update_product(
+    product: ProductDep,
+    product_data: ProductUpdate,
+    session: SessionDep,
+    redis: RedisDep,
+    _admin: AdminRoleDep,
+) -&gt; ProductRead:
+    response = await run_in_threadpool(
+        update_product_in_db,
+        session,
+        product,
+        product_data,
+    )
+    await invalidate_product_cache(redis, product_id=product.id)
+    return response
+
+
+@router.delete(
+    "/{product_id}",
+    status_code=HTTP_204_NO_CONTENT,
+)
+async def delete_product(
+    product: ProductDep,
+    session: SessionDep,
+    redis: RedisDep,
+    _admin: AdminRoleDep,
+) -&gt; None:
+    product_id = product.id
+    await run_in_threadpool(
+        delete_product_from_db,
+        session,
+        product,
+    )
+    await invalidate_product_cache(redis, product_id=product_id)
+</code></pre>
+    <p>Кэш удаляем только после успешного <code>commit()</code>. Если транзакция упала, старый кэш остаётся соответствующим старым данным.</p>
+    <hr>
+
+    <h2>Что инвалидировать</h2>
+<table>
+      <thead>
+      <tr>
+        <th>Операция</th>
+        <th>Кэш деталки</th>
+        <th>Кэш списков</th>
+      </tr>
+      </thead>
+      <tbody>
+      <tr>
+        <td>POST product</td>
+        <td>нет старой деталки</td>
+        <td><code>INCR products:list:version</code></td>
+      </tr>
+      <tr>
+        <td>PUT/PATCH product</td>
+        <td><code>DELETE product:detail:{id}</code></td>
+        <td><code>INCR products:list:version</code></td>
+      </tr>
+      <tr>
+        <td>DELETE product</td>
+        <td><code>DELETE product:detail:{id}</code></td>
+        <td><code>INCR products:list:version</code></td>
+      </tr>
+      </tbody>
+    </table>
+    <p>В текущем проекте категория не редактируется. Если позже появится PUT/PATCH категории, он тоже должен инвалидировать product-кэш: категория входит в <code>ProductRead</code> и влияет на фильтры списков.</p>
+    <hr>
+
+    <h2>Rate limiting через INCR</h2>
+<p>Redis хорош для счётчиков, потому что <code>INCR</code> выполняется атомарно. Даже если два запроса пришли одновременно, счётчик не потеряет одно из увеличений.</p>
+    <pre><code>auth:login:203.0.113.10 = 1, TTL 60 секунд
+auth:login:203.0.113.10 = 2
+auth:login:203.0.113.10 = 3
+...
+после лимита отвечаем 429 Too Many Requests
+</code></pre>
+    <p>Это простой fixed window limiter. Он не идеален на границе минуты, но отлично подходит для первой реализации.</p>
+    <hr>
+
+    <h2>Dependency rate limit</h2>
+<p><b><code>app/dependencies.py</code></b></p>
+    <pre class="language-python"><code>from starlette.status import HTTP_429_TOO_MANY_REQUESTS
+
+
+async def limit_login_attempts(
+    request: Request,
+    redis: RedisDep,
+    settings: SettingsDep,
+) -&gt; None:
+    if redis is None:
+        return
+
+    client_host = request.client.host if request.client else "unknown"
+    key = f"auth:login:{client_host}"
+    attempts = await redis.incr(key)
+    if attempts == 1:
+        await redis.expire(key, 60)
+
+    if attempts &gt; settings.auth_rate_limit_per_minute:
+        raise HTTPException(
+            status_code=HTTP_429_TOO_MANY_REQUESTS,
+            detail="Too many login attempts",
+        )
+
+
+LoginRateLimitDep = Annotated[None, Depends(limit_login_attempts)]
+</code></pre>
+    <p>В реальном сервисе IP за прокси надо брать аккуратно: только из доверенного заголовка, который выставляет ваш reverse proxy.</p>
+    <hr>
+
+    <h2>Подключаем лимит к логину</h2>
+<p><b><code>app/routers/auth.py</code></b></p>
+    <pre class="language-python"><code>from app.dependencies import LoginRateLimitDep
+
+
+@router.post("/token", response_model=Token)
+def login(
+    form_data: LoginForm,
+    _rate_limit: LoginRateLimitDep,
+    session: SessionDep,
+    settings: SettingsDep,
+) -&gt; Token:
+    try:
+        user = authenticate_user(
+            session,
+            form_data.username,
+            form_data.password,
+        )
+    except UnknownHashError:
+        raise invalid_credentials()
+    if user is None:
+        raise invalid_credentials()
+
+    token = create_access_token(str(user.id), settings)
+    return Token(access_token=token)
+</code></pre>
+    <p>Лимит срабатывает до проверки пароля. Это снижает стоимость brute force и не раскрывает, существует ли пользователь.</p>
+    <hr>
+
+    <h2>Тестирование</h2>
+<table>
+      <thead>
+      <tr>
+        <th>Что проверяем</th>
+        <th>Как</th>
+      </tr>
+      </thead>
+      <tbody>
+      <tr>
+        <td>генерация ключей</td>
+        <td>unit-тесты без Redis</td>
+      </tr>
+      <tr>
+        <td>JSON helpers</td>
+        <td>небольшой <code>FakeRedis</code> или реальный Redis</td>
+      </tr>
+      <tr>
+        <td>cache hit</td>
+        <td>второй GET возвращает ответ из Redis</td>
+      </tr>
+      <tr>
+        <td>инвалидация</td>
+        <td>после PATCH старый detail-key удалён</td>
+      </tr>
+      <tr>
+        <td>первый товар после пустого списка</td>
+        <td>версия меняется с <code>v0</code> на <code>v1</code></td>
+      </tr>
+      <tr>
+        <td>rate limit</td>
+        <td>после N запросов логин отвечает <code>429</code></td>
+      </tr>
+      </tbody>
+    </table>
+    <p>Для учебной проверки достаточно поднять Redis в Compose и прогнать несколько интеграционных сценариев через <code>TestClient</code>.</p>
+    <hr>
+
+    <h2>Типичные ошибки</h2>
+<ul>
+      <li>кэшировать ORM-объект вместо JSON-ответа;</li>
+      <li>забыть один query parameter в cache key;</li>
+      <li>инвалидировать кэш до <code>commit()</code>;</li>
+      <li>делать <code>KEYS products:*</code> в production;</li>
+      <li>хранить в Redis секреты без необходимости;</li>
+      <li>считать Redis постоянным хранилищем для данных, которые нельзя потерять.</li>
+    </ul>
+    <p>Самая частая проблема кэша не техническая, а смысловая: приложение начинает быстро отдавать неправильные данные.</p>
+    <hr>
+
+    <h2>Практика</h2>
+<ol>
+      <li>Добавить Redis в Compose и настройки приложения.</li>
+      <li>Подключить <code>redis.asyncio.Redis</code> в существующий lifespan.</li>
+      <li>Создать <code>app/cache.py</code> с ключами, JSON helpers и инвалидацией.</li>
+      <li>Закэшировать список товаров и деталку товара.</li>
+      <li>Инвалидировать кэш после POST, PUT, PATCH и DELETE.</li>
+      <li>Добавить rate limit на <code>POST /auth/token</code>.</li>
+      <li>Проверить cache hit, cache miss, invalidation и <code>429</code>.</li>
+    </ol>
+    <p><b>Дополнительно:</b> сделать graceful degradation для кэша чтения, чтобы товары продолжали открываться при выключенном Redis.</p>
+    <hr>
+
+    <h2>Итоги</h2>
+<ul>
+      <li>Redis хранит временные производные данные, а не заменяет PostgreSQL.</li>
+      <li>Cache-aside сначала проверяет Redis, а при miss читает основную базу.</li>
+      <li>TTL ограничивает жизнь кэша, явная инвалидация убирает устаревшие ответы после записи.</li>
+      <li><code>INCR</code> и <code>EXPIRE</code> дают простой rate limiter.</li>
+      <li>Ключи кэша должны включать все параметры запроса.</li>
+      <li>Async products используют <code>redis.asyncio.Redis</code>, а sync SQLAlchemy временно запускается через thread pool.</li>
+    </ul>
+    <p>На следующей лекции перейдём к очередям сообщений: зачем нужен брокер, чем RabbitMQ отличается от Redis в роли очереди и как публиковать события из FastAPI.</p>
+    <hr>
+  </db-content>
+</div>
+</body>
+</html>

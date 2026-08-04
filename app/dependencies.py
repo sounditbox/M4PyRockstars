@@ -1,5 +1,6 @@
+from __future__ import annotations
 from functools import lru_cache
-from typing import Annotated, Iterator
+from typing import Annotated, Iterator, Optional
 
 import jwt
 from fastapi import Depends, Path, HTTPException
@@ -7,15 +8,47 @@ from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from jwt import InvalidTokenError
 from pydantic import ValidationError
 from pymongo.asynchronous.database import AsyncDatabase
+from redis.asyncio import Redis
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 from starlette.requests import Request
 from starlette.status import HTTP_404_NOT_FOUND, HTTP_403_FORBIDDEN, \
-    HTTP_401_UNAUTHORIZED
+    HTTP_401_UNAUTHORIZED, HTTP_429_TOO_MANY_REQUESTS
 
 from app.core.config import Settings
 from app.models import Product, Category, User
-from app.schemas import ProductRead, UserRead, TokenPayload
+from app.schemas import UserRead, TokenPayload
+
+
+def get_redis(request: Request) -> Redis | None:
+    return request.app.state.redis
+
+
+RedisDep = Annotated[Optional[Redis], Depends(get_redis)]
+
+
+async def limit_login_attempts(
+        request: Request,
+        redis: RedisDep,
+        settings: SettingsDep,
+) -> None:
+    if redis is None:
+        return
+
+    client_host = request.client.host if request.client else "unknown"
+    key = f"auth:login:{client_host}"
+    attempts = await redis.incr(key)
+    if attempts == 1:
+        await redis.expire(key, 60)
+
+    if attempts > settings.auth_rate_limit_per_minute:
+        raise HTTPException(
+            status_code=HTTP_429_TOO_MANY_REQUESTS,
+            detail="Too many login attempts",
+        )
+
+
+LoginRateLimitDep = Annotated[None, Depends(limit_login_attempts)]
 
 
 def get_mongo_database(request: Request) -> AsyncDatabase:
