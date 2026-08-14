@@ -52,8 +52,8 @@ REDIS_URL=redis://localhost:6379/0
 PRODUCT_CACHE_TTL_SECONDS=60
 AUTH_RATE_LIMIT_PER_MINUTE=5
 
-RABBITMQ_URL=amqp://guest:guest@localhost:5672/
-CELERY_BROKER_URL=amqp://guest:guest@localhost:5672//
+RABBITMQ_URL=amqp://products:products@localhost:5672/
+CELERY_BROKER_URL=amqp://products:products@localhost:5672//
 CELERY_RESULT_BACKEND=redis://localhost:6379/1
 ```
 
@@ -80,7 +80,7 @@ uv run uvicorn app.main:app --reload
 
 ```bash
 uv run python -m app.consumers.product_events
-uv run celery -A app.celery_app:celery_app worker --loglevel=info --pool=solo
+uv run celery -A app.celery_app:celery_app worker --loglevel=info --pool=solo --queues=reports,maintenance
 uv run celery -A app.celery_app:celery_app beat --loglevel=info
 uv run celery -A app.celery_app:celery_app flower --port=5555
 ```
@@ -88,7 +88,7 @@ uv run celery -A app.celery_app:celery_app flower --port=5555
 На Linux и macOS параметр `--pool=solo` можно убрать. RabbitMQ Management
 доступен на [http://localhost:15672](http://localhost:15672), Flower — на
 [http://localhost:5555](http://localhost:5555). Для локального RabbitMQ
-используются `guest` / `guest`.
+используются `products` / `products`.
 
 Swagger UI будет доступен по адресу
 [http://localhost:8000/docs](http://localhost:8000/docs).

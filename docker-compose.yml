@@ -1,3 +1,19 @@
+x-base-service: &base-service
+  build: .
+  env_file: .env
+  environment:
+    CELERY_BROKER_URL: amqp://products:products@rabbitmq:5672/
+    CELERY_RESULT_BACKEND: redis://redis:6379/1
+    DATABASE_URL: postgresql+psycopg://postgres:postgres@postgres:5432/products
+  depends_on:
+    rabbitmq:
+      condition: service_healthy
+    postgres:
+      condition: service_healthy
+    mongo:
+      condition: service_healthy
+
+
 services:
   postgres:
     image: postgres:17-alpine
@@ -47,6 +63,9 @@ services:
     ports:
       - "5672:5672"
       - "15672:15672"
+    environment:
+      - RABBITMQ_DEFAULT_USER=products
+      - RABBITMQ_DEFAULT_PASS=products
     volumes:
       - rabbitmq_data:/var/lib/rabbitmq
     healthcheck:
@@ -54,6 +73,29 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
+
+# (uncomment to run backend in docker)
+#  backend:
+#    <<: *base-service
+#    command: uv run -m uvicorn app.main:app --host 0.0.0.0 --port 8000
+
+  celery-reports:
+    <<: *base-service
+    command: uv run -m celery -A app.celery_app worker -l info --queues=reports --concurrency=2 -n reports@%h
+
+  celery-maintenance:
+    <<: *base-service
+    command: uv run -m celery -A app.celery_app worker -l info --queues=maintenance --concurrency=4 -n maintenance@%h
+
+  celery-beat:
+    <<: *base-service
+    command: uv run -m celery -A app.celery_app beat -l info
+
+  flower:
+    <<: *base-service
+    command: uv run -m celery -A app.celery_app flower --port=5555
+    ports:
+      - "5555:5555"
 
 volumes:
   postgres_data:

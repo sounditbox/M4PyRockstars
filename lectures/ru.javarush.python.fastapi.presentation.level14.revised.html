@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="ru" class="light">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link href="https://super-dev-styles.github.io/website-assets/styles.css" rel="stylesheet">
+  <link href="https://super-dev-styles.github.io/website-assets/view.css" rel="stylesheet">
+  <link href="https://super-dev-styles.github.io/website-assets/slides.css" rel="stylesheet">
+  <script src="https://super-dev-styles.github.io/website-assets/slides.js" defer></script>
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism.min.css" rel="stylesheet">
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/plugins/line-numbers/prism-line-numbers.min.css" rel="stylesheet">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-core.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/plugins/autoloader/prism-autoloader.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/plugins/line-numbers/prism-line-numbers.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+  <script>mermaid.initialize({startOnLoad: true});</script>
+  <title>Уровень 14: очереди задач и масштабирование Celery</title>
+</head>
+<body>
+<div class="content lecture-content post-content">
+  <db-content>
+    <h1>Уровень 14: очереди задач и масштабирование Celery</h1>
+    <p>На этом уровне мы разделим уже существующие фоновые задачи по очередям и научимся запускать отдельные обработчики для разных типов нагрузки.</p>
+    <p>После занятия вы сможете объяснить роли producer, broker, queue и worker, создать несколько очередей средствами Celery и масштабировать их обработку.</p>
+    <hr>
+
+    <h2>Очередь отделяет постановку задачи от её выполнения</h2>
+    <div class="mermaid">
+      graph LR
+      API[FastAPI<br/>producer] --> B[RabbitMQ<br/>broker]
+      BEAT[Celery Beat<br/>scheduler] -->|по расписанию| B
+      B --> RQ((reports))
+      B --> MQ((maintenance))
+      RQ --> RW[celery-reports<br/>worker]
+      MQ --> MW[celery-maintenance<br/>worker]
+      RW --> REDIS[(Redis<br/>results)]
+      MW --> REDIS
+    </div>
+    <ul>
+      <li><b>Producer</b> создаёт задачу. В проекте это FastAPI.</li>
+      <li><b>Broker</b> хранит задачи до обработки. В проекте это RabbitMQ.</li>
+      <li><b>Queue</b> группирует задачи одного типа.</li>
+      <li><b>Worker</b> забирает и выполняет задачи. Celery worker и есть consumer.</li>
+      <li><b>Beat</b> ставит периодические задачи по расписанию, но не выполняет их.</li>
+    </ul>
+    <p>Отдельный consumer на <code>aio-pika</code> для Celery не нужен: Celery worker уже подписывается на очередь и подтверждает задачи сам.</p>
+    <hr>
+
+    <h2>В проекте достаточно двух очередей</h2>
+    <ul>
+      <li><code>reports</code> — отчёты, которые могут выполняться долго.</li>
+      <li><code>maintenance</code> — короткие служебные задачи, например ежедневная сводка каталога.</li>
+    </ul>
+    <p>Если поместить всё в одну очередь, несколько долгих отчётов могут задержать короткую служебную задачу. Разные очереди позволяют обрабатывать их независимо.</p>
+    <hr>
+
+    <h2>Celery создаёт очереди из конфигурации</h2>
+    <pre class="language-python"><code>application.conf.update(
+    task_create_missing_queues=True,
+    task_routes={
+        "app.tasks.generate_product_report": {
+            "queue": "reports",
+        },
+        "app.tasks.build_catalog_summary": {
+            "queue": "maintenance",
+        },
+    },
+    task_default_queue="maintenance",
+)</code></pre>
+    <p><code>task_routes</code> отвечает на простой вопрос: в какую очередь отправить задачу с данным именем. Благодаря <code>task_create_missing_queues</code> Celery сам объявит exchange, очередь и binding.</p>
+    <hr>
+
+    <h2>Обычная функция становится задачей через декоратор</h2>
+    <pre class="language-python"><code>@celery_app.task(name="app.tasks.generate_product_report")
+def generate_product_report(...):
+    ...
+
+@celery_app.task(name="app.tasks.build_catalog_summary")
+def build_catalog_summary():
+    ...</code></pre>
+    <p>FastAPI ставит отчёт в очередь вызовом:</p>
+    <pre class="language-python"><code>task = generate_product_report.delay(
+    category_slug=request.category_slug,
+    only_available=request.only_available,
+    limit=request.limit,
+    simulate_work_seconds=request.simulate_work_seconds,
+)</code></pre>
+    <p><code>delay()</code> быстро возвращает идентификатор задачи. Сам отчёт выполняется позже в worker.</p>
+    <hr>
+
+    <h2>Celery Beat ставит задачи по расписанию</h2>
+    <pre class="language-python"><code>beat_schedule={
+    "catalog-summary-every-morning": {
+        "task": "app.tasks.build_catalog_summary",
+        "schedule": crontab(hour=8, minute=0),
+    },
+}</code></pre>
+    <p>В 08:00 UTC Beat публикует <code>build_catalog_summary</code>. Затем <code>task_routes</code> направляет задачу в <code>maintenance</code>, а выполняет её <code>celery-maintenance</code>.</p>
+    <p>Beat — это планировщик, а не worker. Для практики ту же задачу отправим вручную, чтобы не ждать времени из расписания.</p>
+    <hr>
+
+    <h2>Каждый worker слушает только свою очередь</h2>
+    <pre><code class="language-bash"># Долгие отчёты: два одновременных процесса
+celery -A app.celery_app:celery_app worker \
+  --queues=reports --concurrency=2
+
+# Короткие задачи: четыре одновременных процесса
+celery -A app.celery_app:celery_app worker \
+  --queues=maintenance --concurrency=4</code></pre>
+    <p>В проекте команды уже записаны в сервисах <code>celery-reports</code>, <code>celery-maintenance</code> и <code>celery-beat</code>. Запускать их вручную не нужно.</p>
+    <p><code>--queues</code> выбирает очередь, а <code>--concurrency</code> задаёт число задач, которые worker может выполнять одновременно.</p>
+    <hr>
+
+    <h2>Масштабирование — это добавление обработчиков</h2>
+    <p>Если очередь <code>reports</code> растёт, можно увеличить concurrency или запустить дополнительные экземпляры того же worker:</p>
+    <pre><code class="language-bash">docker compose up -d --scale celery-reports=3</code></pre>
+    <p>RabbitMQ распределит задачи очереди <code>reports</code> между всеми подключёнными workers. Сначала нужно посмотреть на длину очереди и время выполнения задач, а уже затем масштабировать.</p>
+    <p><b>Prefetch</b> определяет, сколько задач worker резервирует заранее. Это важная настройка, но на первом знакомстве оставим значение Celery по умолчанию и не будем смешивать её с маршрутизацией.</p>
+    <hr>
+
+    <h2>Практика</h2>
+    <ol>
+      <li>Запустите окружение: <code>docker compose up -d --build --wait</code>.</li>
+      <li>Откройте Swagger UI: <code>http://localhost:8000/docs</code>.</li>
+      <li>Отправьте несколько отчётов с <code>simulate_work_seconds=5</code>.</li>
+      <li>Убедитесь по логам <code>celery-beat</code>, что планировщик запущен и загрузил расписание.</li>
+      <li>Отправьте короткую сводку в очередь <code>maintenance</code>:
+        <pre><code class="language-bash">docker compose exec celery-maintenance \
+  celery -A app.celery_app:celery_app call \
+  app.tasks.build_catalog_summary</code></pre>
+      </li>
+      <li>Откройте RabbitMQ Management: <code>http://localhost:15672</code>.</li>
+      <li>Найдите очереди <code>reports</code> и <code>maintenance</code>.</li>
+      <li>Посмотрите задачи и workers в Flower: <code>http://localhost:5555</code>.</li>
+      <li>Увеличьте число <code>celery-reports</code> и сравните скорость обработки.</li>
+    </ol>
+    <hr>
+
+    <h2>Что важно запомнить</h2>
+    <ul>
+      <li>FastAPI ставит задачу, RabbitMQ хранит её, Celery worker выполняет.</li>
+      <li>Worker — это consumer, поэтому отдельный consumer для Celery не нужен.</li>
+      <li>Разные типы нагрузки удобно разводить по разным очередям через <code>task_routes</code>.</li>
+      <li>Worker выбирает очередь флагом <code>--queues</code>.</li>
+      <li>Beat публикует периодические задачи, а выполняет их обычный worker.</li>
+      <li>Систему масштабируют увеличением concurrency или числа workers.</li>
+    </ul>
+    <p><b>Дальше:</b> acknowledgements, retries, priority, TTL и dead-letter queues стоит изучать после того, как базовая маршрутизация стала понятна.</p>
+    <p><b>Источники:</b>
+      <a href="https://docs.celeryq.dev/en/stable/userguide/routing.html">Celery: Routing Tasks</a>,
+      <a href="https://docs.celeryq.dev/en/stable/userguide/workers.html">Celery: Workers Guide</a>.
+    </p>
+    <hr>
+  </db-content>
+</div>
+</body>
+</html>

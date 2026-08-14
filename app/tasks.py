@@ -1,5 +1,5 @@
 from datetime import UTC, datetime
-
+import time
 from sqlalchemy import func, select
 from sqlalchemy.orm import selectinload
 
@@ -15,10 +15,14 @@ def generate_product_report(
         category_slug: str | None = None,
         only_available: bool = True,
         limit: int = 100,
+        simulate_work_seconds: int = 0,
 ) -> dict:
     settings = Settings()
     engine = create_database_engine(settings.database_url)
     session_factory = create_session_factory(engine)
+
+    if simulate_work_seconds:
+        time.sleep(simulate_work_seconds)
 
     try:
         with session_factory() as session:
@@ -51,8 +55,6 @@ def generate_product_report(
         "count": len(rows),
         "products": rows,
     }
-
-
 @celery_app.task(name="app.tasks.build_catalog_summary")
 def build_catalog_summary() -> dict:
     settings = Settings()

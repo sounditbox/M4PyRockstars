@@ -172,6 +172,7 @@ class ProductReportRequest(BaseModel):
     category_slug: CategorySlug | None = None
     only_available: bool = True
     limit: int = Field(default=100, ge=1, le=500)
+    simulate_work_seconds: int = Field(default=0, ge=0, le=30)
 
 
 class TaskAccepted(BaseModel):

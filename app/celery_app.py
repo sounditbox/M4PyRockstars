@@ -3,6 +3,8 @@ from celery.schedules import crontab
 
 from app.core.config import Settings
 
+REPORT_QUEUE = "reports"
+MAINTENANCE_QUEUE = "maintenance"
 
 def create_celery_app(settings: Settings | None = None) -> Celery:
     settings = settings or Settings()
@@ -22,8 +24,17 @@ def create_celery_app(settings: Settings | None = None) -> Celery:
         result_expires=3600,
         timezone="UTC",
         enable_utc=True,
-        task_default_queue="reports",
         broker_connection_retry_on_startup=True,
+        task_create_missing_queues=True,
+        task_routes={
+            "app.tasks.generate_product_report": {
+                "queue": REPORT_QUEUE,
+            },
+            "app.tasks.build_catalog_summary": {
+                "queue": MAINTENANCE_QUEUE,
+            },
+        },
+        task_default_queue=MAINTENANCE_QUEUE,
         beat_schedule={
             "catalog-summary-every-morning": {
                 "task": "app.tasks.build_catalog_summary",
