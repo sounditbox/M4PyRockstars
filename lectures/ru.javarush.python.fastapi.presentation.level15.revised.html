@@ -1,0 +1,424 @@
+<!doctype html>
+<html lang="ru" class="light">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link href="https://super-dev-styles.github.io/website-assets/styles.css" rel="stylesheet">
+  <link href="https://super-dev-styles.github.io/website-assets/view.css" rel="stylesheet">
+  <link href="https://super-dev-styles.github.io/website-assets/slides.css" rel="stylesheet">
+  <script src="https://super-dev-styles.github.io/website-assets/slides.js" defer></script>
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism.min.css" rel="stylesheet">
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/plugins/line-numbers/prism-line-numbers.min.css" rel="stylesheet">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-core.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/plugins/autoloader/prism-autoloader.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/plugins/line-numbers/prism-line-numbers.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+  <script>mermaid.initialize({startOnLoad: true});</script>
+  <style>
+    .approach-visuals {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 1.25rem;
+      margin: 1rem 0;
+    }
+    .approach-visuals figure {
+      margin: 0;
+      padding: 0.75rem;
+      border: 1px solid #d8dee9;
+      border-radius: 14px;
+      background: #fff;
+      text-align: center;
+    }
+    .approach-visuals img {
+      display: block;
+      width: 100%;
+      height: 230px;
+      object-fit: contain;
+      margin: 0 auto 0.65rem;
+    }
+    @media (max-width: 850px) {
+      .approach-visuals { grid-template-columns: 1fr; }
+    }
+  </style>
+  <title>Уровень 15: надёжность Celery — retry, acknowledgements и DLQ</title>
+</head>
+<body>
+<div class="content lecture-content post-content">
+  <db-content>
+    <h1>Уровень 15: надёжность Celery — retry, acknowledgements и DLQ</h1>
+    <p>На прошлом уровне мы развели задачи по очередям <code>reports</code> и <code>maintenance</code>. Теперь разберём, что происходит, когда база временно недоступна, worker завершается посреди задачи или сообщение невозможно обработать.</p>
+    <p>После занятия вы сможете отличить Celery retry от повторной доставки RabbitMQ, безопасно включить позднее подтверждение для задачи, которую не страшно запустить повторно, и объяснить, при каких условиях сообщение действительно попадает в DLQ.</p>
+    <hr>
+
+    <h2>Products API перед началом уровня</h2>
+    <div class="mermaid">
+      graph LR
+      API[FastAPI<br/>producer] --> RMQ[RabbitMQ]
+      RMQ --> RQ((reports))
+      RMQ --> MQ((maintenance))
+      RQ --> RW[celery-reports]
+      MQ --> MW[celery-maintenance]
+      RW --> DB[(PostgreSQL)]
+      MW --> DB
+      RW --> REDIS[(Redis results)]
+      MW --> REDIS
+    </div>
+    <ul>
+      <li><code>generate_product_report</code> выполняется в очереди <code>reports</code>.</li>
+      <li><code>build_catalog_summary</code> выполняется в очереди <code>maintenance</code>.</li>
+      <li>FastAPI возвращает <code>task_id</code>, а состояние задачи хранится в Redis.</li>
+      <li>Flower и RabbitMQ Management уже доступны из Docker Compose.</li>
+    </ul>
+    <p>Маршрутизация решает, <i>где</i> выполнить задачу. Надёжность отвечает на другой вопрос: <i>что делать после сбоя</i>.</p>
+    <hr>
+
+    <h2>Почему обработка ошибок в асинхронных системах критически важна?</h2>
+    <p>Обычный HTTP-запрос завершается на глазах у пользователя: API сразу возвращает успех или ошибку. Фоновая задача выполняется позже, поэтому API уже мог ответить <code>202 Accepted</code>, хотя сама работа ещё не началась.</p>
+    <div class="mermaid">
+      sequenceDiagram
+      participant U as Пользователь
+      participant API as FastAPI
+      participant B as RabbitMQ
+      participant W as Celery worker
+      U->>API: создать отчёт
+      API->>B: поставить задачу
+      API-->>U: 202 Accepted + task_id
+      B-->>W: доставить задачу
+      W->>W: ошибка во время выполнения
+      Note over U,W: HTTP-ответ уже отправлен — сбой нужно обнаружить отдельно
+    </div>
+    <ul>
+      <li><b>Ошибка не видна сразу:</b> пользователь получил <code>task_id</code>, но результат может так и не появиться.</li>
+      <li><b>Операция может выполниться частично:</b> одна запись сохранена, а следующая внешняя операция не состоялась.</li>
+      <li><b>Бесконтрольный retry усиливает сбой:</b> сотни задач одновременно атакуют недоступную базу или API.</li>
+      <li><b>Потеря процесса создаёт дубликаты:</b> broker может передать неподтверждённое сообщение повторно.</li>
+      <li><b>Без наблюдаемости трудно найти причину:</b> нужны <code>task_id</code>, состояние задачи, логи и метрики очереди.</li>
+    </ul>
+    <p>Надёжная система не обещает, что ошибок не будет. Она делает сбой видимым, ограничивает его последствия и предоставляет безопасный путь восстановления.</p>
+    <hr>
+
+    <h2>Основные подходы к обработке ошибок</h2>
+    <div class="approach-visuals">
+      <figure>
+        <img
+          src="https://cdn.javarush.com/images/article/859713a6-4438-41a6-a35d-54e27e2a2f8f/800.jpeg"
+          alt="Сообщение после неуспешной обработки направляется из рабочей очереди в Dead Letter Queue"
+        >
+        <figcaption><b>DLQ</b> изолирует сообщения, которые нельзя безопасно оставить в рабочей очереди.</figcaption>
+      </figure>
+      <figure>
+        <img
+          src="https://cdn.javarush.com/images/article/f8ed5e08-cec3-43ce-8aa7-c8908e8332e0/800.jpeg"
+          alt="Повторные попытки обработки выполняются с задержкой после временного сбоя"
+        >
+        <figcaption><b>Retry</b> даёт временно недоступной зависимости время восстановиться.</figcaption>
+      </figure>
+    </div>
+    <ul>
+      <li><b>Retry:</b> повторяет задачу после ожидаемой временной ошибки.</li>
+      <li><b>Timeout:</b> ограничивает зависшую I/O-операцию или задачу.</li>
+      <li><b>Acknowledgement:</b> сообщает broker, что делать с доставленным сообщением.</li>
+      <li><b>DLQ:</b> изолирует отклонённые сообщения для анализа и контролируемого replay.</li>
+      <li><b>Логи и мониторинг:</b> позволяют восстановить последовательность событий.</li>
+    </ul>
+    <p>Это не последовательные стадии одного алгоритма, а независимые механизмы. Дальше разберём, какой сбой решает каждый из них.</p>
+    <hr>
+
+    <h2>Сначала классифицируем ошибку</h2>
+    <table>
+      <thead>
+      <tr><th>Ситуация</th><th>Пример</th><th>Правильная реакция</th></tr>
+      </thead>
+      <tbody>
+      <tr><td>Временная ошибка</td><td>обрыв соединения, timeout, HTTP 503</td><td>retry с задержкой</td></tr>
+      <tr><td>Постоянная ошибка</td><td>невалидные данные, HTTP 400/401/404</td><td>завершить без retry, исследовать причину</td></tr>
+      <tr><td>Потеря процесса</td><td>контейнер остановлен, OOM, hard time limit</td><td>redelivery неподтверждённого сообщения</td></tr>
+      <tr><td>Poison message</td><td>сообщение стабильно ломает обработчик</td><td>изолировать в DLQ</td></tr>
+      </tbody>
+    </table>
+    <p>Retry каждой ошибки подряд не делает систему надёжнее. Постоянная ошибка лишь повторится несколько раз и создаст лишнюю нагрузку.</p>
+    <hr>
+
+    <h2>Гарантия — не «ровно один раз»</h2>
+    <p><b>ACK</b> — подтверждение consumer для RabbitMQ: «сообщение обработано, его можно удалить из очереди». Момент отправки ACK определяет, что произойдёт при падении процесса.</p>
+    <table>
+      <thead>
+      <tr><th>Режим</th><th>Когда отправляется ACK</th><th>Если процесс исчез во время задачи</th></tr>
+      </thead>
+      <tbody>
+      <tr><td>По умолчанию</td><td>до выполнения задачи</td><td>сообщение уже подтверждено и не будет доставлено повторно</td></tr>
+      <tr><td><code>acks_late=True</code></td><td>после выполнения задачи</td><td>неподтверждённое сообщение может вернуться в очередь</td></tr>
+      </tbody>
+    </table>
+    <p>Поздний ACK уменьшает риск потери задачи, но создаёт окно дублирования: бизнес-операция могла завершиться, а соединение оборвалось прямо перед ACK. RabbitMQ доставит сообщение снова, и код выполнится второй раз.</p>
+    <ul>
+      <li><b>At-most-once:</b> задача выполнится не более одного раза, но может потеряться.</li>
+      <li><b>At-least-once:</b> с поздним ACK и корректной обработкой потери worker задача не должна потеряться при сбое, но может выполниться повторно.</li>
+      <li><b>Exactly-once:</b> нельзя получить одной настройкой Celery или RabbitMQ. Бизнес-операция должна безопасно переносить повторный запуск.</li>
+    </ul>
+    <p><b>Важное уточнение:</b> <code>acks_late</code> означает «ACK после выполнения», а не обязательно «ACK только после успеха». По умолчанию Celery подтверждает и упавшую задачу через <code>task_acks_on_failure_or_timeout=True</code>; нужное поведение при ошибке и потере worker настраивается отдельно.</p>
+    <p>Поэтому сначала убеждаемся, что повторный запуск не испортит данные, а затем включаем позднее подтверждение.</p>
+    <hr>
+
+    <h2>Retry, redelivery и DLQ решают разные задачи</h2>
+    <table>
+      <thead>
+      <tr><th>Механизм</th><th>Кто запускает</th><th>Что происходит</th></tr>
+      </thead>
+      <tbody>
+      <tr><td>Celery retry</td><td>код задачи</td><td>публикуется новое сообщение с тем же <code>task_id</code></td></tr>
+      <tr><td>RabbitMQ redelivery</td><td>broker</td><td>повторно доставляется прежнее неподтверждённое сообщение</td></tr>
+      <tr><td>Dead lettering</td><td>broker</td><td>отклонённое или просроченное сообщение маршрутизируется через DLX</td></tr>
+      </tbody>
+    </table>
+    <p><code>max_retries</code> сам по себе не создаёт DLQ. Чтобы финальная ошибка попала туда, очередь должна иметь DLX, а сообщение должно быть отклонено без возврата в исходную очередь.</p>
+    <hr>
+
+    <h2>Retry нужен только для ожидаемых временных ошибок</h2>
+    <pre class="language-python"><code>class TemporaryReportError(Exception):
+    """Сбой, после которого отчёт имеет смысл попробовать снова."""
+
+
+@celery_app.task(
+    bind=True,
+    name="app.tasks.generate_product_report",
+    autoretry_for=(TemporaryReportError,),
+    retry_kwargs={"max_retries": 3},
+    retry_backoff=2,
+    retry_backoff_max=60,
+    retry_jitter=True,
+)
+def generate_product_report(self, ...):
+    ...</code></pre>
+    <ul>
+      <li><code>autoretry_for</code> ограничивает список повторяемых ошибок.</li>
+      <li><code>max_retries=3</code> означает максимум три повтора после первого запуска.</li>
+      <li><code>retry_backoff=2</code> задаёт интервалы порядка 2, 4 и 8 секунд.</li>
+      <li><code>retry_jitter=True</code> добавляет случайность, чтобы много задач не повторились одновременно.</li>
+    </ul>
+    <hr>
+
+    <h2>Retry публикует новое сообщение</h2>
+    <div class="mermaid">
+      sequenceDiagram
+      participant W as Celery worker
+      participant B as RabbitMQ
+      participant R as Redis backend
+      W->>W: попытка 1 — временная ошибка
+      W->>B: новое сообщение с тем же task_id
+      W->>R: состояние RETRY
+      B-->>W: попытка 2 после countdown
+      W->>W: успешное выполнение
+      W->>R: состояние SUCCESS
+    </div>
+    <p><code>self.retry()</code> не является <code>nack</code> исходного сообщения. Celery завершает текущую попытку специальным состоянием <code>RETRY</code> и отправляет следующую попытку в ту же очередь.</p>
+    <hr>
+
+    <h2><code>acks_late</code> защищает от потери процесса</h2>
+    <pre class="language-python"><code>@celery_app.task(
+    bind=True,
+    name="app.tasks.generate_product_report",
+    acks_late=True,
+    reject_on_worker_lost=True,
+    acks_on_failure_or_timeout=False,
+    ...,
+)
+def generate_product_report(self, ...):
+    ...</code></pre>
+    <ul>
+      <li><code>acks_late=True</code> переносит ACK на момент после выполнения.</li>
+      <li><code>reject_on_worker_lost=True</code> разрешает requeue при внезапной потере процесса.</li>
+      <li><code>acks_on_failure_or_timeout=False</code> отклоняет финально упавшую задачу вместо обычного ACK.</li>
+    </ul>
+    <p><b>Осторожно:</b> потерянная задача может выполниться повторно, а постоянный аварийный сбой способен создать цикл. Эти настройки разумны только тогда, когда повторный запуск не портит данные, и вместе с DLQ/лимитом повторов.</p>
+    <hr>
+
+    <h2>Retry и потеря worker выглядят по-разному</h2>
+    <div class="mermaid">
+      graph TD
+      A[Worker получил задачу] --> B{Что произошло?}
+      B -->|Ожидаемая временная ошибка| C[Celery retry]
+      C --> D[Новое сообщение<br/>с countdown]
+      B -->|Процесс исчез до ACK| E[RabbitMQ redelivery]
+      E --> F[Прежнее сообщение<br/>другому worker]
+      B -->|Постоянная ошибка| G[Reject без requeue]
+      G --> H[DLX]
+      H --> I((dlq))
+    </div>
+    <p>Retry контролируется приложением. Redelivery и dead lettering — реакция broker на статус подтверждения сообщения.</p>
+    <hr>
+
+    <h2>У задачи два уровня таймаутов</h2>
+    <pre class="language-python"><code>from celery.exceptions import SoftTimeLimitExceeded
+
+
+@celery_app.task(
+    soft_time_limit=25,
+    time_limit=30,
+    ...,
+)
+def generate_product_report(...):
+    try:
+        return build_report(...)
+    except SoftTimeLimitExceeded:
+        logger.warning("Report exceeded soft time limit")
+        raise</code></pre>
+    <ul>
+      <li>Timeout клиента БД или HTTP ограничивает отдельную I/O-операцию.</li>
+      <li>Soft time limit даёт задаче шанс освободить ресурсы.</li>
+      <li>Hard time limit принудительно завершает исполняющий процесс.</li>
+    </ul>
+    <p>Time limits зависят от worker pool и сигналов ОС. Для демонстрации используйте Docker worker с prefork; локальный <code>--pool=solo</code> на Windows для этой практики не подходит.</p>
+    <hr>
+
+    <h2>Как объявить DLQ</h2>
+    <div class="mermaid">
+      graph LR
+      RQ((reports)) -->|reject / nack<br/>requeue=false| DLX[dlx]
+      DLX -->|failed| DLQ((dlq))
+      DLQ --> HUMAN[анализ причины]
+      HUMAN -->|после исправления| REPLAY[контролируемый replay]
+    </div>
+    <p>RabbitMQ отправляет сообщение в DLX, когда оно отклонено без requeue, истекло по TTL, вытеснено лимитом очереди или превысило delivery limit quorum-очереди.</p>
+    <p>В проекте топология описана объектами Kombu — отдельные RabbitMQ config/definitions-файлы не нужны. Используем общую очередь <code>dlq</code>: к тому же <code>dlx</code> позднее можно подключить другие рабочие очереди, а исходную очередь и причину dead lettering найти в заголовке <code>x-death</code>.</p>
+    <pre class="language-python"><code>DEAD_LETTER_EXCHANGE = Exchange("dlx", type="direct", durable=True)
+DEAD_LETTER_QUEUE = Queue(
+    "dlq",
+    exchange=DEAD_LETTER_EXCHANGE,
+    routing_key="failed",
+    durable=True,
+)
+
+REPORT_QUEUE = Queue(
+    "reports",
+    exchange=Exchange("reports", type="direct", durable=True),
+    routing_key="reports",
+    queue_arguments={
+        "x-dead-letter-exchange": "dlx",
+        "x-dead-letter-routing-key": "failed",
+    },
+)
+MAINTENANCE_QUEUE = Queue(
+    "maintenance",
+    exchange=Exchange("maintenance", type="direct", durable=True),
+    routing_key="maintenance",
+)
+
+task_queues = (REPORT_QUEUE, MAINTENANCE_QUEUE)
+
+task_routes = {
+    "app.tasks.generate_product_report": {
+        "queue": "reports",
+        "declare": (REPORT_QUEUE, DEAD_LETTER_QUEUE),
+    },
+}
+task_default_queue = "maintenance"</code></pre>
+    <ol>
+      <li><code>task_queues</code> хранит рабочую очередь с DLX-аргументами;</li>
+      <li><code>declare</code> создаёт рабочую очередь, общую <code>dlq</code> и необходимые exchanges при отправке отчёта;</li>
+      <li><code>dlq</code> не добавляется в <code>task_queues</code>, поэтому worker не забирает сообщения из неё.</li>
+    </ol>
+    <p>Аргументы очереди неизменяемы. Если <code>reports</code> уже была создана без DLX, перед первым запуском новой версии удалите пустую очередь <code>reports</code> в RabbitMQ Management — Celery создаст её заново.</p>
+    <hr>
+
+    <h2>Неизлечимую задачу отклоняем без requeue</h2>
+    <pre class="language-python"><code>from celery.exceptions import Reject
+
+
+@celery_app.task(
+    bind=True,
+    acks_late=True,
+    acks_on_failure_or_timeout=False,
+)
+def generate_product_report(
+    self,
+    simulate_permanent_error=False,
+):
+    if simulate_permanent_error:
+        exc = PermanentReportError("Invalid report")
+        logger.error(
+            "Permanent report error",
+            extra={"task_id": self.request.id},
+        )
+        raise Reject(exc, requeue=False)</code></pre>
+    <p><code>Reject(..., requeue=False)</code> — явный broker-level отказ. Если у исходной очереди настроен DLX, RabbitMQ направит сообщение в DLQ.</p>
+    <p>Повторно публиковать сообщения из DLQ следует только после исправления причины. Автоматический бесконечный replay возвращает poison message в рабочую очередь.</p>
+    <hr>
+
+    <h2>Логи отвечают на четыре вопроса</h2>
+    <pre class="language-python"><code>from celery.utils.log import get_task_logger
+
+logger = get_task_logger(__name__)
+
+logger.warning(
+    "Report retry scheduled",
+    extra={
+        "task_id": self.request.id,
+        "attempt": self.request.retries + 1,
+        "category_slug": category_slug,
+    },
+)
+
+try:
+    ...
+except Exception:
+    logger.exception("Report generation failed")
+    raise</code></pre>
+    <ol>
+      <li>Какая задача упала?</li>
+      <li>На какой попытке?</li>
+      <li>С какими безопасными параметрами?</li>
+      <li>Какая исходная ошибка и traceback?</li>
+    </ol>
+    <p>Пароли, токены, полные персональные данные и содержимое секретных payload в лог не записываем.</p>
+    <hr>
+
+    <h2>Flower и RabbitMQ показывают разные уровни</h2>
+    <table>
+      <thead>
+      <tr><th>Инструмент</th><th>Что проверять</th></tr>
+      </thead>
+      <tbody>
+      <tr><td>Flower</td><td><code>RETRY</code>, <code>FAILURE</code>, traceback, runtime, worker</td></tr>
+      <tr><td>RabbitMQ Management</td><td>Ready/Unacked, consumer count, redelivery, рост <code>dlq</code></td></tr>
+      <tr><td>Логи worker</td><td>task_id, номер попытки, причина retry или reject</td></tr>
+      </tbody>
+    </table>
+    <p><b>Следующий шаг — внешняя наблюдаемость:</b> Sentry группирует исключения и отправляет уведомления, а ELK собирает логи разных API и workers в одном месте для поиска и анализа. Здесь мы только фиксируем их роль; полноценную интеграцию разберём на отдельном уровне про наблюдаемость.</p>
+    <hr>
+
+    <h2>Практика: временная ошибка, падение и DLQ</h2>
+    <ol>
+      <li>Добавьте к отчёту <code>bind=True</code>, ограниченный retry с backoff/jitter и параметр <code>simulate_failures</code>.</li>
+      <li>Включите для отчёта <code>acks_late</code>, <code>reject_on_worker_lost</code> и осознанное поведение при финальной ошибке.</li>
+      <li>Объявите общие <code>dlx</code>, <code>dlq</code> и binding через Kombu; добавьте DLX-аргументы к рабочей очереди.</li>
+      <li>Запустите инфраструктуру и workers: <code>docker compose up -d --build --wait</code>.</li>
+      <li>Запустите API локально: <code>uv run uvicorn app.main:app --reload</code>.</li>
+      <li>Отправьте отчёт с <code>simulate_failures=2</code> и проследите <code>RETRY → SUCCESS</code> во Flower.</li>
+      <li>Отправьте долгий отчёт, остановите <code>celery-reports</code> во время выполнения и после его запуска проверьте redelivery.</li>
+      <li>Отправьте отчёт с <code>simulate_permanent_error=true</code>, убедитесь, что рабочая очередь продолжает обрабатываться, а сообщение появилось в общей очереди <code>dlq</code>.</li>
+      <li>Добавьте тесты на параметры retry, маршрутизацию, безопасный повторный запуск отчёта и отсутствие retry для постоянной ошибки.</li>
+    </ol>
+    <hr>
+
+    <h2>Что важно запомнить</h2>
+    <ul>
+      <li>Retry обрабатывает ожидаемую ошибку и публикует новую попытку.</li>
+      <li>Redelivery возвращает неподтверждённое сообщение после потери consumer.</li>
+      <li>DLQ требует DLX и конкретного условия dead-lettering.</li>
+      <li><code>acks_late</code> означает возможность повторного выполнения, а не exactly-once.</li>
+      <li>Позднее подтверждение включают только тогда, когда повторный запуск задачи безопасен.</li>
+      <li>Backoff ограничиваем сверху и дополняем jitter.</li>
+      <li>Flower показывает задачи, RabbitMQ Management — состояние сообщений и очередей.</li>
+    </ul>
+    <p><b>Источники:</b>
+      <a href="https://docs.celeryq.dev/en/stable/userguide/tasks.html">Celery: Tasks</a>,
+      <a href="https://docs.celeryq.dev/en/stable/userguide/configuration.html">Celery: Configuration</a>,
+      <a href="https://docs.celeryq.dev/en/stable/faq.html#should-i-use-retry-or-acks-late">Celery: retry or acks_late</a>,
+      <a href="https://www.rabbitmq.com/docs/4.1/dlx">RabbitMQ: Dead Letter Exchanges</a>.
+    </p>
+    <hr>
+  </db-content>
+</div>
+</body>
+</html>

@@ -167,6 +167,8 @@ def test_start_product_report_returns_task_id(admin_client, monkeypatch):
         "only_available": True,
         "limit": 25,
         "simulate_work_seconds": 0,
+        "simulate_failures": 0,
+        "simulate_permanent_error": False,
     }
 
 
