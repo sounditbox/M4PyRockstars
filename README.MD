@@ -80,7 +80,7 @@ uv run uvicorn app.main:app --reload
 
 ```bash
 uv run python -m app.consumers.product_events
-uv run celery -A app.celery_app:celery_app worker --loglevel=info --pool=solo --queues=reports,maintenance
+uv run celery -A app.celery_app:celery_app worker --loglevel=info --pool=solo --queues=maintenance
 uv run celery -A app.celery_app:celery_app beat --loglevel=info
 uv run celery -A app.celery_app:celery_app flower --port=5555
 ```

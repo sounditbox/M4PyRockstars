@@ -46,7 +46,7 @@
 <div class="content lecture-content post-content">
   <db-content>
     <h1>Уровень 15: надёжность Celery — retry, acknowledgements и DLQ</h1>
-    <p>На прошлом уровне мы развели задачи по очередям <code>reports</code> и <code>maintenance</code>. Теперь разберём, что происходит, когда база временно недоступна, worker завершается посреди задачи или сообщение невозможно обработать.</p>
+    <p>На прошлом уровне мы направили фоновые задачи в общую очередь <code>maintenance</code>. Теперь разберём, что происходит, когда база временно недоступна, worker завершается посреди задачи или сообщение невозможно обработать.</p>
     <p>После занятия вы сможете отличить Celery retry от повторной доставки RabbitMQ, безопасно включить позднее подтверждение для задачи, которую не страшно запустить повторно, и объяснить, при каких условиях сообщение действительно попадает в DLQ.</p>
     <hr>
 
@@ -54,17 +54,13 @@
     <div class="mermaid">
       graph LR
       API[FastAPI<br/>producer] --> RMQ[RabbitMQ]
-      RMQ --> RQ((reports))
       RMQ --> MQ((maintenance))
-      RQ --> RW[celery-reports]
       MQ --> MW[celery-maintenance]
-      RW --> DB[(PostgreSQL)]
       MW --> DB
-      RW --> REDIS[(Redis results)]
       MW --> REDIS
     </div>
     <ul>
-      <li><code>generate_product_report</code> выполняется в очереди <code>reports</code>.</li>
+      <li><code>generate_product_report</code> выполняется в очереди <code>maintenance</code>.</li>
       <li><code>build_catalog_summary</code> выполняется в очереди <code>maintenance</code>.</li>
       <li>FastAPI возвращает <code>task_id</code>, а состояние задачи хранится в Redis.</li>
       <li>Flower и RabbitMQ Management уже доступны из Docker Compose.</li>
@@ -274,7 +270,7 @@ def generate_product_report(...):
     <h2>Как объявить DLQ</h2>
     <div class="mermaid">
       graph LR
-      RQ((reports)) -->|reject / nack<br/>requeue=false| DLX[dlx]
+      MQ((maintenance)) -->|reject / nack<br/>requeue=false| DLX[dlx]
       DLX -->|failed| DLQ((dlq))
       DLQ --> HUMAN[анализ причины]
       HUMAN -->|после исправления| REPLAY[контролируемый replay]
@@ -289,27 +285,22 @@ DEAD_LETTER_QUEUE = Queue(
     durable=True,
 )
 
-REPORT_QUEUE = Queue(
-    "reports",
-    exchange=Exchange("reports", type="direct", durable=True),
-    routing_key="reports",
+MAINTENANCE_QUEUE = Queue(
+    "maintenance",
+    exchange=Exchange("maintenance", type="direct", durable=True),
+    routing_key="maintenance",
     queue_arguments={
         "x-dead-letter-exchange": "dlx",
         "x-dead-letter-routing-key": "failed",
     },
 )
-MAINTENANCE_QUEUE = Queue(
-    "maintenance",
-    exchange=Exchange("maintenance", type="direct", durable=True),
-    routing_key="maintenance",
-)
 
-task_queues = (REPORT_QUEUE, MAINTENANCE_QUEUE)
+task_queues = (MAINTENANCE_QUEUE,)
 
 task_routes = {
     "app.tasks.generate_product_report": {
-        "queue": "reports",
-        "declare": (REPORT_QUEUE, DEAD_LETTER_QUEUE),
+        "queue": "maintenance",
+        "declare": (MAINTENANCE_QUEUE, DEAD_LETTER_QUEUE),
     },
 }
 task_default_queue = "maintenance"</code></pre>
@@ -318,7 +309,7 @@ task_default_queue = "maintenance"</code></pre>
       <li><code>declare</code> создаёт рабочую очередь, общую <code>dlq</code> и необходимые exchanges при отправке отчёта;</li>
       <li><code>dlq</code> не добавляется в <code>task_queues</code>, поэтому worker не забирает сообщения из неё.</li>
     </ol>
-    <p>Аргументы очереди неизменяемы. Если <code>reports</code> уже была создана без DLX, перед первым запуском новой версии удалите пустую очередь <code>reports</code> в RabbitMQ Management — Celery создаст её заново.</p>
+    <p>Аргументы очереди неизменяемы. Если <code>maintenance</code> уже была создана без DLX, перед первым запуском новой версии удалите пустую очередь <code>maintenance</code> в RabbitMQ Management — Celery создаст её заново.</p>
     <hr>
 
     <h2>Неизлечимую задачу отклоняем без requeue</h2>
@@ -395,7 +386,7 @@ except Exception:
       <li>Запустите инфраструктуру и workers: <code>docker compose up -d --build --wait</code>.</li>
       <li>Запустите API локально: <code>uv run uvicorn app.main:app --reload</code>.</li>
       <li>Отправьте отчёт с <code>simulate_failures=2</code> и проследите <code>RETRY → SUCCESS</code> во Flower.</li>
-      <li>Отправьте долгий отчёт, остановите <code>celery-reports</code> во время выполнения и после его запуска проверьте redelivery.</li>
+      <li>Отправьте долгий отчёт, остановите <code>celery-maintenance</code> во время выполнения и после его запуска проверьте redelivery.</li>
       <li>Отправьте отчёт с <code>simulate_permanent_error=true</code>, убедитесь, что рабочая очередь продолжает обрабатываться, а сообщение появилось в общей очереди <code>dlq</code>.</li>
       <li>Добавьте тесты на параметры retry, маршрутизацию, безопасный повторный запуск отчёта и отсутствие retry для постоянной ошибки.</li>
     </ol>

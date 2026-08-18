@@ -79,10 +79,6 @@ services:
 #    <<: *base-service
 #    command: uv run -m uvicorn app.main:app --host 0.0.0.0 --port 8000
 
-  celery-reports:
-    <<: *base-service
-    command: uv run -m celery -A app.celery_app worker -l info --queues=reports --concurrency=2 -n reports@%h
-
   celery-maintenance:
     <<: *base-service
     command: uv run -m celery -A app.celery_app worker -l info --queues=maintenance --concurrency=4 -n maintenance@%h

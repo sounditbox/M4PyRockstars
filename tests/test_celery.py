@@ -19,14 +19,14 @@ def test_celery_uses_rabbitmq_redis_and_daily_beat_schedule():
     assert schedule["task"] == "app.tasks.build_catalog_summary"
 
 
-def test_report_queue_uses_common_dead_letter_queue():
+def test_maintenance_queue_uses_common_dead_letter_queue():
     queues = celery_app.amqp.queues
-    report_queue = queues["reports"]
+    maintenance_queue = queues["maintenance"]
 
-    assert set(queues) == {"reports", "maintenance"}
-    assert report_queue.exchange.name == "reports"
-    assert report_queue.routing_key == "reports"
-    assert report_queue.queue_arguments == {
+    assert set(queues) == {"maintenance"}
+    assert maintenance_queue.exchange.name == "maintenance"
+    assert maintenance_queue.routing_key == "maintenance"
+    assert maintenance_queue.queue_arguments == {
         "x-dead-letter-exchange": "dlx",
         "x-dead-letter-routing-key": "failed",
     }
@@ -36,10 +36,10 @@ def test_report_queue_uses_common_dead_letter_queue():
         "app.tasks.generate_product_report",
     )
     assert {queue.name for queue in report_route["declare"]} == {
-        "reports",
+        "maintenance",
         "dlq",
     }
-    assert report_route["queue"].name == "reports"
+    assert report_route["queue"].name == "maintenance"
 
     maintenance_route = celery_app.amqp.router.route(
         {},

@@ -4,7 +4,6 @@ from kombu import Exchange, Queue
 
 from app.core.config import Settings
 
-REPORT_QUEUE_NAME = "reports"
 DLX_NAME = "dlx"
 DLQ_NAME = "dlq"
 DLQ_ROUTING_KEY = "failed"
@@ -19,20 +18,6 @@ DEAD_LETTER_QUEUE = Queue(
     durable=True,
 )
 
-REPORT_EXCHANGE = Exchange(
-    REPORT_QUEUE_NAME,
-    type="direct",
-    durable=True,
-)
-REPORT_QUEUE = Queue(
-    REPORT_QUEUE_NAME,
-    exchange=REPORT_EXCHANGE,
-    routing_key=REPORT_QUEUE_NAME,
-    queue_arguments={
-        "x-dead-letter-exchange": DLX_NAME,
-        "x-dead-letter-routing-key": DLQ_ROUTING_KEY,
-    },
-)
 MAINTENANCE_EXCHANGE = Exchange(
     MAINTENANCE_QUEUE_NAME,
     type="direct",
@@ -42,6 +27,10 @@ MAINTENANCE_QUEUE = Queue(
     MAINTENANCE_QUEUE_NAME,
     exchange=MAINTENANCE_EXCHANGE,
     routing_key=MAINTENANCE_QUEUE_NAME,
+    queue_arguments={
+        "x-dead-letter-exchange": DLX_NAME,
+        "x-dead-letter-routing-key": DLQ_ROUTING_KEY,
+    },
 )
 
 
@@ -64,12 +53,12 @@ def create_celery_app(settings: Settings | None = None) -> Celery:
         timezone="UTC",
         enable_utc=True,
         broker_connection_retry_on_startup=True,
-        task_create_missing_queues=True,
-        task_queues=(REPORT_QUEUE, MAINTENANCE_QUEUE),
+        task_create_missing_queues=False,
+        task_queues=(MAINTENANCE_QUEUE,),
         task_routes={
             "app.tasks.generate_product_report": {
-                "queue": REPORT_QUEUE_NAME,
-                "declare": (REPORT_QUEUE, DEAD_LETTER_QUEUE),
+                "queue": MAINTENANCE_QUEUE_NAME,
+                "declare": (MAINTENANCE_QUEUE, DEAD_LETTER_QUEUE),
             },
             "app.tasks.build_catalog_summary": {
                 "queue": MAINTENANCE_QUEUE_NAME,
