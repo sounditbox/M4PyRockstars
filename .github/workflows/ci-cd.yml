@@ -119,6 +119,7 @@ jobs:
             sudo git checkout '$DEPLOY_BRANCH'; \
             sudo git merge --ff-only 'origin/$DEPLOY_BRANCH'; \
             sudo test \"\$(git rev-parse HEAD)\" = '$GITHUB_SHA'; \
+            sudo docker-compose down; \
             sudo docker-compose up -d --build --remove-orphans"
 
       - name: Verify public health endpoint
