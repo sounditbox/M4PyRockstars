@@ -1,3 +1,5 @@
+import random
+
 from fastapi import APIRouter
 
 router = APIRouter(
@@ -17,3 +19,10 @@ async def root():
             description="Health endpoint description", tags=["Health"])
 async def healthcheck():
     return {"status": "ok"}
+
+
+@router.get("/random/{number}", status_code=200, summary="Get random number",
+            description="Get random number between 0 and number",
+            tags=["Random"])
+async def random_n(number):
+    return {"number": random.randint(0, number)}
