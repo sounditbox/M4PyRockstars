@@ -119,7 +119,7 @@ jobs:
             sudo git checkout '$DEPLOY_BRANCH'; \
             sudo git merge --ff-only 'origin/$DEPLOY_BRANCH'; \
             sudo test \"\$(git rev-parse HEAD)\" = '$GITHUB_SHA'; \
-            sudo docker compose up -d --build --wait --wait-timeout 180 --remove-orphans; \
+            sudo docker-compose up -d --build --wait --wait-timeout 180 --remove-orphans; \
             sudo curl --fail --silent --show-error \
               http://127.0.0.1:8000/api/v1/health"
 
