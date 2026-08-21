@@ -136,10 +136,31 @@ Swagger UI будет доступен по адресу
 uv run pytest
 ```
 
+Проверка стиля и явных ошибок Python-кода:
+
+```bash
+uv run ruff check app tests
+```
+
 Тесты используют временную SQLite-базу и тестовые реализации внешних сервисов,
 поэтому не требуют запущенных PostgreSQL, MongoDB, Redis или RabbitMQ. Для
 интеграционной проверки запустите Compose, consumer и Celery worker, затем
 работайте с events/jobs-маршрутами через Swagger UI.
+
+## CI/CD
+
+Workflow [`.github/workflows/ci-cd.yml`](.github/workflows/ci-cd.yml) запускает
+Ruff и pytest, собирает Docker-образ, а после push в `release/render_0.1`
+обновляет Yandex Cloud VM через SSH и проверяет `/api/v1/health`.
+
+Создайте GitHub Environment `production` и добавьте:
+
+- secrets `SSH_PRIVATE_KEY` и `SSH_KNOWN_HOSTS`;
+- variables `DEPLOY_HOST`, `DEPLOY_USER` и `DEPLOY_PATH`.
+
+В `DEPLOY_PATH` на сервере должен находиться clone этого репозитория на ветке
+`release/render_0.1`. Пользователь деплоя должен иметь доступ к Docker без
+интерактивного `sudo`, а production-файл `.env` должен оставаться на VM.
 
 ## Структура
 

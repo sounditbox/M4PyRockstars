@@ -1,0 +1,132 @@
+name: Products API CI/CD
+
+on:
+  pull_request:
+    branches:
+      - release/render_0.1
+  push:
+    branches:
+      - release/render_0.1
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v9
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --locked --dev
+
+      - name: Run Ruff
+        run: uv run ruff check app tests
+
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v9
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --locked --dev
+
+      - name: Run pytest
+        run: uv run pytest
+
+  build:
+    name: Build Docker image
+    needs:
+      - lint
+      - test
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Build image
+        run: docker build --tag products-api:${{ github.sha }} .
+
+  deploy:
+    name: Deploy to Yandex Cloud
+    needs:
+      - build
+    if: >-
+      github.ref == 'refs/heads/release/render_0.1' &&
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment:
+      name: production
+      url: http://${{ vars.DEPLOY_HOST }}:8000/docs
+    concurrency:
+      group: production
+      cancel-in-progress: false
+    steps:
+      - name: Configure SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.SSH_KNOWN_HOSTS }}
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+
+      - name: Update services and verify health
+        env:
+          DEPLOY_HOST: ${{ vars.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ vars.DEPLOY_USER }}
+          DEPLOY_PATH: ${{ vars.DEPLOY_PATH }}
+          DEPLOY_BRANCH: release/render_0.1
+        run: |
+          ssh -i ~/.ssh/deploy_key \
+            -o BatchMode=yes \
+            -o StrictHostKeyChecking=yes \
+            "$DEPLOY_USER@$DEPLOY_HOST" \
+            "set -eu; \
+            cd '$DEPLOY_PATH'; \
+            git fetch origin '$DEPLOY_BRANCH'; \
+            git checkout '$DEPLOY_BRANCH'; \
+            git merge --ff-only 'origin/$DEPLOY_BRANCH'; \
+            test \"\$(git rev-parse HEAD)\" = '$GITHUB_SHA'; \
+            docker compose up -d --build --wait --wait-timeout 180 --remove-orphans; \
+            curl --fail --silent --show-error \
+              http://127.0.0.1:8000/api/v1/health"
+
+      - name: Verify public health endpoint
+        env:
+          DEPLOY_HOST: ${{ vars.DEPLOY_HOST }}
+        run: |
+          curl --fail --silent --show-error \
+            --retry 5 --retry-delay 3 --retry-connrefused \
+            "http://$DEPLOY_HOST:8000/api/v1/health"

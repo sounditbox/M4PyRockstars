@@ -1,0 +1,560 @@
+<!doctype html>
+<html lang="ru" class="light">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link href="https://super-dev-styles.github.io/website-assets/styles.css" rel="stylesheet">
+  <link href="https://super-dev-styles.github.io/website-assets/view.css" rel="stylesheet">
+  <link href="https://super-dev-styles.github.io/website-assets/slides.css" rel="stylesheet">
+  <script src="https://super-dev-styles.github.io/website-assets/slides.js" defer></script>
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism.min.css" rel="stylesheet">
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/plugins/line-numbers/prism-line-numbers.min.css" rel="stylesheet">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-core.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/plugins/autoloader/prism-autoloader.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/plugins/line-numbers/prism-line-numbers.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+  <script>mermaid.initialize({startOnLoad: true});</script>
+  <style>
+    .callout {
+      margin: 1rem 0;
+      padding: 0.9rem 1rem;
+      border-left: 5px solid #5b8def;
+      border-radius: 8px;
+      background: #f4f7ff;
+    }
+    .warning {
+      border-left-color: #e6a23c;
+      background: #fff8eb;
+    }
+    .success {
+      border-left-color: #3f9f68;
+      background: #effaf3;
+    }
+    .compact-code code {
+      font-size: 0.9em;
+      line-height: 1.35;
+    }
+    .muted {
+      color: #5f6b7a;
+    }
+    .pipeline-key {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 0.75rem;
+      margin: 1rem 0;
+    }
+    .pipeline-key div {
+      padding: 0.75rem;
+      border: 1px solid #d8dee9;
+      border-radius: 10px;
+      background: #fff;
+      text-align: center;
+    }
+    .cicd-visual {
+      margin: 0.75rem auto 0;
+      text-align: center;
+    }
+    .cicd-visual img {
+      display: block;
+      width: min(100%, 1100px);
+      max-height: 64vh;
+      margin: 0 auto;
+      object-fit: contain;
+      border-radius: 12px;
+    }
+    @media (max-width: 850px) {
+      .pipeline-key { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
+  </style>
+  <title>Уровень 17: CI/CD с GitHub Actions</title>
+</head>
+<body>
+<div class="content lecture-content post-content">
+  <db-content>
+    <h1>Уровень 17: CI/CD с GitHub Actions</h1>
+    <p>На прошлом занятии мы вручную перенесли Products API на виртуальную машину Yandex Cloud. Теперь превратим те же действия в воспроизводимый конвейер.</p>
+    <p>После занятия вы сможете объяснить модель GitHub Actions, прочитать workflow-файл и собрать цепочку <code>lint → test → build → deploy</code>, в которой ошибка на любом этапе останавливает публикацию.</p>
+    <hr>
+
+    <h2>CI/CD — один непрерывный цикл изменений</h2>
+    <figure class="cicd-visual">
+      <img src="ci-cd-infinity.png" alt="Цикл CI/CD в форме знака бесконечности: от планирования и кода до развёртывания и мониторинга">
+    </figure>
+    <hr>
+
+    <h2>Ручной деплой работает, но плохо повторяется</h2>
+    <p>Вчера разработчик сам проверял код, подключался к серверу, обновлял репозиторий, пересобирал контейнеры и открывал health endpoint. Один раз это нормально. При каждом изменении — источник пропущенных шагов.</p>
+    <div class="mermaid">
+      flowchart LR
+      DEV[Разработчик] --> CHECK[Проверки]
+      CHECK --> SSH[SSH на VM]
+      SSH --> UPDATE[Обновление кода]
+      UPDATE --> START[Запуск сервисов]
+      START --> HEALTH[Health check]
+    </div>
+    <div class="callout"><b>Задача CI/CD:</b> сохранить понятную последовательность ручного деплоя, но поручить повторяемые действия автоматике.</div>
+    <hr>
+
+    <h2>CI и CD отвечают на разные вопросы</h2>
+    <table>
+      <thead>
+      <tr><th>Часть</th><th>Вопрос</th><th>Что делает наш workflow</th></tr>
+      </thead>
+      <tbody>
+      <tr><td><b>CI</b><br>Continuous Integration</td><td>Можно ли безопасно объединить изменение с общей веткой?</td><td>Запускает Ruff, pytest и сборку Docker-образа</td></tr>
+      <tr><td><b>Continuous Delivery</b></td><td>Готова ли проверенная версия к публикации?</td><td>Доводит commit до состояния «можно деплоить»</td></tr>
+      <tr><td><b>Continuous Deployment</b></td><td>Можно ли сразу опубликовать проверенную версию?</td><td>После push в release-ветку обновляет Yandex Cloud VM</td></tr>
+      </tbody>
+    </table>
+    <p>Слово <b>CD</b> используют для delivery и deployment. Разница — остаётся ли перед production ручное подтверждение.</p>
+    <hr>
+
+    <h2>Pipeline — это цепочка ворот качества</h2>
+    <div class="mermaid">
+      flowchart LR
+      COMMIT[Commit] --> LINT[Lint]
+      COMMIT --> TEST[Test]
+      LINT --> BUILD[Build]
+      TEST --> BUILD
+      BUILD --> DEPLOY[Deploy]
+      DEPLOY --> HEALTH[Health check]
+    </div>
+    <div class="pipeline-key">
+      <div><b>Lint</b><br><span class="muted">быстрые дефекты кода</span></div>
+      <div><b>Test</b><br><span class="muted">поведение приложения</span></div>
+      <div><b>Build</b><br><span class="muted">собираемость контейнера</span></div>
+      <div><b>Deploy</b><br><span class="muted">обновление production</span></div>
+    </div>
+    <p>Следующий этап начинается только после успешных предыдущих. Красный lint — это не «почти успешно»: build и deploy не запускаются.</p>
+    <hr>
+
+    <h2>GitHub Actions хранит автоматизацию рядом с кодом</h2>
+    <div class="mermaid">
+      flowchart TD
+      EVENT[Событие GitHub] --> WF[Workflow YAML]
+      WF --> RUN[Workflow run]
+      RUN --> J1[Job: lint]
+      RUN --> J2[Job: test]
+      J1 --> J3[Job: build]
+      J2 --> J3
+      J3 --> J4[Job: deploy]
+      J4 --> VM[Yandex Cloud VM]
+    </div>
+    <p>Workflow лежит в <code>.github/workflows/ci-cd.yml</code>. GitHub читает этот файл из репозитория и создаёт отдельный run для подходящего события.</p>
+    <div class="callout success">История pipeline становится частью истории проекта: видно, какой commit, когда и с каким результатом проходил проверки.</div>
+    <hr>
+
+    <h2>Словарь GitHub Actions</h2>
+    <table>
+      <thead>
+      <tr><th>Термин</th><th>Что это</th></tr>
+      </thead>
+      <tbody>
+      <tr><td>Event</td><td>Событие, которое запускает workflow: push, pull request или ручной запуск</td></tr>
+      <tr><td>Workflow</td><td>Весь сценарий автоматизации из одного YAML-файла</td></tr>
+      <tr><td>Workflow run</td><td>Конкретный запуск workflow для конкретного commit</td></tr>
+      <tr><td>Job</td><td>Набор шагов, выполняемый на одном runner</td></tr>
+      <tr><td>Step</td><td>Одна команда shell или готовый action</td></tr>
+      <tr><td>Action</td><td>Переиспользуемый шаг, например checkout репозитория</td></tr>
+      <tr><td>Runner</td><td>Машина, на которой GitHub выполняет job</td></tr>
+      <tr><td>Secret / variable</td><td>Настройка, которую GitHub подставляет во время запуска</td></tr>
+      </tbody>
+    </table>
+    <hr>
+
+    <h2>Событие отвечает на вопрос «когда запускать»</h2>
+    <pre class="line-numbers language-yaml"><code>on:
+  pull_request:
+    branches:
+      - release/render_0.1
+  push:
+    branches:
+      - release/render_0.1
+  workflow_dispatch:</code></pre>
+    <ul>
+      <li><code>pull_request</code> проверяет изменение до слияния.</li>
+      <li><code>push</code> проверяет уже появившийся в ветке commit.</li>
+      <li><code>workflow_dispatch</code> добавляет кнопку ручного запуска, когда workflow уже находится в default branch.</li>
+    </ul>
+    <p>Фильтр <code>branches</code> относится к целевой ветке pull request и к ветке, куда пришёл push.</p>
+    <hr>
+
+    <h2>Runner начинает каждый job с чистого окружения</h2>
+    <pre class="language-yaml"><code>jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7</code></pre>
+    <ul>
+      <li>GitHub создаёт временную Ubuntu-машину.</li>
+      <li><code>checkout</code> помещает нужный commit в рабочую директорию.</li>
+      <li>Локальная <code>.venv</code>, запущенные контейнеры и файл <code>.env</code> туда не попадают.</li>
+      <li>После job машина удаляется; следующему job нужно снова получить код.</li>
+    </ul>
+    <div class="callout warning">Если команда работает только на ноутбуке разработчика, но не на чистом runner, pipeline обнаруживает скрытую зависимость от локального окружения.</div>
+    <hr>
+
+    <h2><code>uses</code> подключает action, <code>run</code> выполняет команду</h2>
+    <pre class="line-numbers language-yaml"><code>steps:
+  - name: Checkout repository
+    uses: actions/checkout@v7
+
+  - name: Set up uv
+    uses: astral-sh/setup-uv@v9
+    with:
+      enable-cache: true
+
+  - name: Install dependencies
+    run: uv sync --locked --dev</code></pre>
+    <ul>
+      <li><code>uses</code> вызывает готовый компонент с определённым интерфейсом.</li>
+      <li><code>with</code> передаёт action входные параметры.</li>
+      <li><code>run</code> выполняет обычную команду в shell runner.</li>
+      <li><code>--locked</code> запрещает незаметно изменить <code>uv.lock</code> внутри CI.</li>
+    </ul>
+    <hr>
+
+    <h2><code>needs</code> превращает независимые jobs в pipeline</h2>
+    <pre class="language-yaml"><code>jobs:
+  lint:
+    ...
+
+  test:
+    ...
+
+  build:
+    needs:
+      - lint
+      - test
+
+  deploy:
+    needs:
+      - build</code></pre>
+    <p>Без <code>needs</code> jobs по умолчанию могут стартовать параллельно. В нашем pipeline lint и test независимы и экономят время параллельным запуском. Build ждёт оба результата, deploy ждёт build.</p>
+    <hr>
+
+    <h2>Pull request проверяем, но не деплоим</h2>
+    <table>
+      <thead>
+      <tr><th>Событие</th><th>Lint</th><th>Test</th><th>Build</th><th>Deploy</th></tr>
+      </thead>
+      <tbody>
+      <tr><td>Pull request в release-ветку</td><td>Да</td><td>Да</td><td>Да</td><td><b>Нет</b></td></tr>
+      <tr><td>Push в release-ветку</td><td>Да</td><td>Да</td><td>Да</td><td>Да</td></tr>
+      <tr><td>Ручной запуск release-ветки*</td><td>Да</td><td>Да</td><td>Да</td><td>Да</td></tr>
+      <tr><td>Push в другую ветку</td><td>Нет</td><td>Нет</td><td>Нет</td><td>Нет</td></tr>
+      </tbody>
+    </table>
+    <p class="muted">* Кнопка ручного запуска появляется после того, как файл workflow существует в default branch; при запуске можно выбрать release-ветку.</p>
+    <p>Код pull request может быть недоверенным. Job с production-секретами не должен выполняться для произвольной ветки.</p>
+    <hr>
+
+    <h2>Lint дёшево ловит дефекты до тестов</h2>
+    <pre class="language-bash"><code>uv run ruff check app tests</code></pre>
+    <p>Ruff анализирует Python-код без запуска приложения. В проекте включён небольшой baseline:</p>
+    <pre class="language-toml"><code>[tool.ruff]
+target-version = "py314"
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F"]</code></pre>
+    <ul>
+      <li><code>E4/E7/E9</code> — ошибки структуры, синтаксиса и отступов.</li>
+      <li><code>F</code> — неопределённые имена, неиспользуемые импорты и другие явные ошибки.</li>
+    </ul>
+    <p>Строгие правила добавляют постепенно: сначала исправляют старый код, затем делают новое правило обязательным.</p>
+    <hr>
+
+    <h2>Тесты проверяют поведение Products API</h2>
+    <pre class="language-bash"><code>uv run pytest</code></pre>
+    <p>Наши fixtures создают временную SQLite-базу и подменяют внешние зависимости. Поэтому unit- и API-тестам в GitHub Actions не нужны запущенные PostgreSQL, MongoDB, Redis и RabbitMQ.</p>
+    <div class="mermaid">
+      flowchart LR
+      PYTEST[pytest] --> APP[FastAPI TestClient]
+      APP --> SQLITE[(temporary SQLite)]
+      APP --> FAKES[тестовые реализации зависимостей]
+    </div>
+    <div class="callout">Если появятся настоящие интеграционные тесты, инфраструктуру можно добавить через <code>services</code> или Docker Compose в отдельном job.</div>
+    <hr>
+
+    <h2>Build доказывает, что Dockerfile действительно собирается</h2>
+    <pre class="language-yaml"><code>build:
+  name: Build Docker image
+  needs:
+    - lint
+    - test
+  runs-on: ubuntu-latest
+  steps:
+    - uses: actions/checkout@v7
+    - name: Build image
+      run: docker build --tag products-api:${{ github.sha }} .</code></pre>
+    <ul>
+      <li>Тег содержит SHA commit — точный идентификатор версии.</li>
+      <li>Build проверяет инструкции <code>FROM</code>, <code>COPY</code> и <code>RUN uv sync</code>.</li>
+      <li>В учебном варианте образ не отправляется в registry: production VM пересобирает его из того же commit.</li>
+    </ul>
+    <div class="callout warning">Успешные Python-тесты ещё не гарантируют успешную сборку контейнера. Dockerfile — отдельный исполняемый артефакт.</div>
+    <hr>
+
+    <h2>Deploy повторяет вчерашний сценарий через SSH</h2>
+    <div class="mermaid">
+      sequenceDiagram
+      participant G as GitHub runner
+      participant VM as Yandex Cloud VM
+      participant D as Docker Compose
+      participant API as Products API
+      G->>VM: SSH с deploy key
+      VM->>VM: git fetch + fast-forward
+      VM->>VM: проверить SHA commit
+      VM->>D: up -d --build --wait
+      D->>API: запустить backend
+      VM->>API: GET /api/v1/health
+      API-->>VM: 200 OK
+      VM-->>G: exit code 0
+      G->>API: публичный GET /api/v1/health
+      API-->>G: 200 OK
+    </div>
+    <p>GitHub не «телепортирует» приложение в облако. Runner подключается к уже подготовленной VM, выполняет знакомые команды без интерактивного ввода, а затем проверяет API снаружи VM.</p>
+    <hr>
+
+    <h2>Код обновляется, серверные данные остаются на VM</h2>
+    <table>
+      <thead>
+      <tr><th>Обновляет pipeline</th><th>Не хранит в Git и не перезаписывает</th></tr>
+      </thead>
+      <tbody>
+      <tr><td>Исходный код нужного commit</td><td>Production-файл <code>.env</code></td></tr>
+      <tr><td>Docker-образ приложения</td><td>Docker volumes PostgreSQL, MongoDB, Redis и RabbitMQ</td></tr>
+      <tr><td>Контейнеры из <code>docker-compose.yml</code></td><td>SSH private key</td></tr>
+      <tr><td>Миграции Alembic при старте backend</td><td>Настройки сети и самой VM</td></tr>
+      </tbody>
+    </table>
+    <p><code>.env</code> уже исключён из Git. Файл с настройками, названный IP-адресом VM, тоже нужно игнорировать: другое имя не делает секрет безопасным.</p>
+    <hr>
+
+    <h2>Secrets и variables разделяют чувствительные и обычные настройки</h2>
+    <table>
+      <thead>
+      <tr><th>GitHub Environment: production</th><th>Имя</th><th>Назначение</th></tr>
+      </thead>
+      <tbody>
+      <tr><td>Secret</td><td><code>SSH_PRIVATE_KEY</code></td><td>Закрытый ключ для подключения runner к VM</td></tr>
+      <tr><td>Secret</td><td><code>SSH_KNOWN_HOSTS</code></td><td>Доверенный публичный host key сервера</td></tr>
+      <tr><td>Variable</td><td><code>DEPLOY_HOST</code></td><td>Публичный IP или DNS-имя VM</td></tr>
+      <tr><td>Variable</td><td><code>DEPLOY_USER</code></td><td>Linux-пользователь деплоя</td></tr>
+      <tr><td>Variable</td><td><code>DEPLOY_PATH</code></td><td>Каталог репозитория на VM</td></tr>
+      </tbody>
+    </table>
+    <div class="callout warning">Production <code>.env</code> остаётся только на сервере. Его содержимое не нужно копировать в workflow.</div>
+    <hr>
+
+    <h2>Deploy key даёт автоматике отдельный доступ</h2>
+    <p>На доверенном компьютере создайте отдельную пару ключей без passphrase:</p>
+    <pre class="language-bash"><code>ssh-keygen -t ed25519 \
+  -C github-actions-deploy \
+  -f github-actions-deploy</code></pre>
+    <p>Публичный ключ <code>github-actions-deploy.pub</code> добавьте на VM в <code>~/.ssh/authorized_keys</code>. Закрытый ключ сохраните как <code>SSH_PRIVATE_KEY</code> в GitHub Environment.</p>
+    <p>Получите host key сервера и проверьте его fingerprint по доверенному каналу:</p>
+    <pre class="language-bash"><code>ssh-keyscan -H SERVER_IP</code></pre>
+    <p>Проверенную строку сохраните как <code>SSH_KNOWN_HOSTS</code>. Workflow использует <code>StrictHostKeyChecking=yes</code>, поэтому не подключится к серверу с неожиданным ключом.</p>
+    <hr>
+
+    <h2>Environment ставит границу вокруг production</h2>
+    <ol>
+      <li>Откройте <b>Settings → Environments → New environment</b>.</li>
+      <li>Создайте environment с именем <code>production</code>.</li>
+      <li>Добавьте два secrets и три variables.</li>
+      <li>При необходимости включите required reviewers и ограничьте deployment branch.</li>
+    </ol>
+    <pre class="language-yaml"><code>environment:
+  name: production
+  url: http://${{ vars.DEPLOY_HOST }}:8000/docs
+
+concurrency:
+  group: production
+  cancel-in-progress: false</code></pre>
+    <p>Environment выдаёт production-секреты только deploy-job. <code>concurrency</code> не позволяет двум деплоям одновременно менять одну VM.</p>
+    <hr>
+
+    <h2>Workflow, часть 1: имя, события и минимальные права</h2>
+    <pre class="line-numbers language-yaml"><code>name: Products API CI/CD
+
+on:
+  pull_request:
+    branches:
+      - release/render_0.1
+  push:
+    branches:
+      - release/render_0.1
+  workflow_dispatch:
+
+permissions:
+  contents: read</code></pre>
+    <p>Workflow нужен только доступ на чтение к содержимому репозитория. Он не создаёт commits, releases или packages, поэтому выдавать права записи не требуется.</p>
+    <hr>
+
+    <h2>Workflow, часть 2: lint и test</h2>
+    <pre class="compact-code line-numbers language-yaml"><code>jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+      - uses: astral-sh/setup-uv@v9
+        with:
+          enable-cache: true
+      - run: uv sync --locked --dev
+      - run: uv run ruff check app tests
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+      - uses: astral-sh/setup-uv@v9
+        with:
+          enable-cache: true
+      - run: uv sync --locked --dev
+      - run: uv run pytest</code></pre>
+    <p>Jobs намеренно разделены: оба стартуют параллельно, а в GitHub UI сразу видно, какой тип проверки упал.</p>
+    <hr>
+
+    <h2>Workflow, часть 3: build после двух зелёных jobs</h2>
+    <pre class="line-numbers language-yaml"><code>build:
+  name: Build Docker image
+  needs:
+    - lint
+    - test
+  runs-on: ubuntu-latest
+  steps:
+    - uses: actions/checkout@v7
+    - name: Build image
+      run: docker build \
+        --tag products-api:${{ github.sha }} .</code></pre>
+    <p><code>github.sha</code> берётся из контекста запуска. Это SHA проверяемого commit, а не произвольная строка, введённая пользователем.</p>
+    <hr>
+
+    <h2>Workflow, часть 4: deploy только из release-ветки</h2>
+    <pre class="compact-code line-numbers language-yaml"><code>deploy:
+  needs: [build]
+  if: &gt;-
+    github.ref == 'refs/heads/release/render_0.1' &amp;&amp;
+    (github.event_name == 'push' ||
+     github.event_name == 'workflow_dispatch')
+  runs-on: ubuntu-latest
+  environment: production
+  concurrency:
+    group: production
+    cancel-in-progress: false</code></pre>
+    <p>Условие не разрешает deploy из pull request и другой ветки. Перед запуском job GitHub применяет правила environment <code>production</code>.</p>
+    <hr>
+
+    <h2>Deploy-job готовит SSH и запускает серверные команды</h2>
+    <pre class="compact-code line-numbers language-yaml"><code>- name: Configure SSH
+  env:
+    SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+    SSH_KNOWN_HOSTS: ${{ secrets.SSH_KNOWN_HOSTS }}
+  run: |
+    install -m 700 -d ~/.ssh
+    printf '%s\n' "$SSH_PRIVATE_KEY" &gt; ~/.ssh/deploy_key
+    chmod 600 ~/.ssh/deploy_key
+    printf '%s\n' "$SSH_KNOWN_HOSTS" &gt; ~/.ssh/known_hosts
+
+- name: Update services and verify health
+  run: |
+    ssh -i ~/.ssh/deploy_key USER@HOST \
+      "cd PATH &amp;&amp;
+       git fetch origin BRANCH &amp;&amp;
+       git merge --ff-only origin/BRANCH &amp;&amp;
+       docker compose up -d --build --wait &amp;&amp;
+       curl --fail http://127.0.0.1:8000/api/v1/health"</code></pre>
+    <p>В настоящем файле <code>USER</code>, <code>HOST</code> и <code>PATH</code> берутся из environment variables, перед Compose проверяется точный SHA commit, а отдельный step обращается к публичному health endpoint.</p>
+    <hr>
+
+    <h2>Один push проходит четыре наблюдаемых состояния</h2>
+    <ol>
+      <li>GitHub создаёт run и параллельно запускает <b>Lint</b> и <b>Test</b>.</li>
+      <li>После двух успехов запускается <b>Build Docker image</b>.</li>
+      <li>После build GitHub открывает доступ к environment <b>production</b>.</li>
+      <li>Runner подключается к VM, обновляет services и проверяет health endpoint сначала локально на VM, затем по публичному адресу.</li>
+    </ol>
+    <div class="callout success">Зелёный workflow означает не только «тесты прошли», а «проверенный commit запущен и ответил на health check».</div>
+    <p>Для диагностики откройте <b>Actions → CI/CD → нужный run → нужный job</b>. Каждый step хранит отдельный журнал и exit code.</p>
+    <hr>
+
+    <h2>Ошибка останавливает pipeline в правильном месте</h2>
+    <table>
+      <thead>
+      <tr><th>Где упало</th><th>Что это обычно означает</th><th>Что не запустится</th></tr>
+      </thead>
+      <tbody>
+      <tr><td>Lint</td><td>Синтаксис, неопределённое имя, неиспользуемый import</td><td>Build и deploy</td></tr>
+      <tr><td>Test</td><td>Регрессия поведения или неправильный fixture</td><td>Build и deploy</td></tr>
+      <tr><td>Build</td><td>Ошибка Dockerfile, lock-файла или установки зависимостей</td><td>Deploy</td></tr>
+      <tr><td>SSH</td><td>Ключ, пользователь, host key, firewall или выключенная VM</td><td>Сервер не меняется</td></tr>
+      <tr><td>Compose</td><td>Сервис не стартовал или зависимость unhealthy</td><td>Health check</td></tr>
+      <tr><td>Health check</td><td>Контейнер запущен, но API не готово отвечать</td><td>Run становится красным</td></tr>
+      </tbody>
+    </table>
+    <hr>
+
+    <h2>Практика: запускаем первый CI/CD run</h2>
+    <ol>
+      <li>На VM убедитесь, что репозиторий находится на ветке <code>release/render_0.1</code>, Docker Compose запускается без <code>sudo</code>, а production <code>.env</code> лежит в корне проекта.</li>
+      <li>Создайте deploy key и добавьте публичную часть в <code>authorized_keys</code>.</li>
+      <li>Создайте GitHub Environment <code>production</code>, добавьте secrets и variables.</li>
+      <li>Закоммитьте <code>pyproject.toml</code>, <code>uv.lock</code> и <code>.github/workflows/ci-cd.yml</code>.</li>
+      <li>Сделайте push в <code>release/render_0.1</code> и проследите переход <code>lint/test → build → deploy</code>.</li>
+      <li>Откройте URL environment и убедитесь, что Swagger UI и health endpoint доступны.</li>
+      <li>Временно сломайте тест в отдельной ветке и проверьте, что pull request не доходит до deploy.</li>
+    </ol>
+    <hr>
+
+    <h2>Rollback должен возвращать известный commit</h2>
+    <p>Автоматический deploy ускоряет публикацию, но не отменяет план возврата. Простейший учебный rollback — вернуть release-ветку к исправляющему commit через обычный <code>git revert</code> и снова пройти pipeline.</p>
+    <div class="mermaid">
+      flowchart LR
+      BAD[Плохой commit] --> REVERT[git revert]
+      REVERT --> CI[lint + test + build]
+      CI --> DEPLOY[deploy исправляющего commit]
+    </div>
+    <ul>
+      <li><code>git revert</code> сохраняет историю и создаёт новый commit.</li>
+      <li>Миграции базы данных требуют отдельной backward-совместимой стратегии.</li>
+      <li>Docker volumes не откатываются вместе с исходным кодом.</li>
+    </ul>
+    <hr>
+
+    <h2>Что важно запомнить</h2>
+    <ul>
+      <li>CI проверяет изменение, CD доставляет проверенную версию дальше.</li>
+      <li>Workflow состоит из events, jobs и steps; runner выполняет каждый job в чистом окружении.</li>
+      <li><code>needs</code> задаёт порядок и не пропускает ошибку к deploy.</li>
+      <li>Pull request запускает проверки, но не получает production-секреты.</li>
+      <li>Секреты хранятся в GitHub Environment, production <code>.env</code> остаётся на VM.</li>
+      <li>Deploy завершён только после внешней или серверной проверки health endpoint.</li>
+      <li>Наш первый pipeline: <code>Ruff → pytest → Docker build → SSH + Compose + health</code>.</li>
+    </ul>
+    <p><b>Источники:</b>
+      <a href="https://docs.github.com/actions/about-github-actions/understanding-github-actions">GitHub: Understanding Actions</a>,
+      <a href="https://docs.github.com/actions/reference/workflows-and-actions/workflow-syntax">GitHub: Workflow syntax</a>,
+      <a href="https://docs.github.com/actions/how-tos/write-workflows/choose-what-workflows-do/use-jobs">GitHub: Jobs and needs</a>,
+      <a href="https://docs.github.com/actions/how-tos/manage-workflow-runs/manually-run-a-workflow">GitHub: Manual run</a>,
+      <a href="https://docs.github.com/actions/concepts/security/secrets">GitHub: Secrets</a>,
+      <a href="https://docs.github.com/actions/reference/workflows-and-actions/deployments-and-environments">GitHub: Environments</a>,
+      <a href="https://docs.github.com/actions/reference/security/secure-use">GitHub: Secure use</a>,
+      <a href="https://github.com/actions/checkout">actions/checkout</a>,
+      <a href="https://github.com/actions/setup-python">actions/setup-python</a>,
+      <a href="https://docs.astral.sh/uv/guides/integration/github/">uv: GitHub Actions</a>,
+      <a href="https://docs.astral.sh/ruff/linter/">Ruff linter</a>,
+      <a href="https://docs.docker.com/build/ci/github-actions/">Docker: GitHub Actions</a>,
+      <a href="https://docs.docker.com/reference/cli/docker/compose/up/">Docker Compose up</a>.
+    </p>
+    <hr>
+  </db-content>
+</div>
+</body>
+</html>

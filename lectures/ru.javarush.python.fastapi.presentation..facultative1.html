@@ -1,0 +1,258 @@
+<!doctype html>
+<html lang="ru" class="light">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link href="https://super-dev-styles.github.io/website-assets/styles.css" rel="stylesheet">
+  <link href="https://super-dev-styles.github.io/website-assets/view.css" rel="stylesheet">
+  <link href="https://super-dev-styles.github.io/website-assets/slides.css" rel="stylesheet">
+  <script src="https://super-dev-styles.github.io/website-assets/slides.js" defer></script>
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism.min.css" rel="stylesheet">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-core.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/plugins/autoloader/prism-autoloader.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+  <script>mermaid.initialize({startOnLoad: true});</script>
+  <style>
+    .callout {
+      margin: 1rem 0;
+      padding: 0.9rem 1rem;
+      border-left: 5px solid #5b8def;
+      border-radius: 8px;
+      background: #f4f7ff;
+    }
+    .warning {
+      border-left-color: #e6a23c;
+      background: #fff8eb;
+    }
+  </style>
+  <title>Факультатив: ручной деплой</title>
+</head>
+<body>
+<div class="content lecture-content post-content">
+  <db-content>
+    <h1>Факультатив: ручной деплой</h1>
+    <p>Локальное приложение доступно только разработчику. После деплоя у приложения появляется публичный адрес, который можно передать другим людям.</p>
+    <p>На занятии мы откроем локальный FastAPI через ngrok, познакомимся с облачными платформами и вручную запустим приложение на виртуальном сервере Yandex Cloud.</p>
+    <hr>
+
+    <h2>От локального запуска к серверу</h2>
+    <p>Во время разработки приложение запускается на нашем компьютере и слушает <code>localhost</code>. Такой адрес недоступен другим пользователям через интернет.</p>
+    <p>При деплое мы повторяем запуск в другом окружении: на облачной платформе или удалённом Linux-сервере. Сервер получает публичный адрес и принимает внешние HTTP-запросы.</p>
+    <table>
+      <thead>
+      <tr><th>Локальный запуск</th><th>После деплоя</th></tr>
+      </thead>
+      <tbody>
+      <tr><td>Приложение работает на компьютере разработчика</td><td>Приложение работает на удалённом сервере</td></tr>
+      <tr><td>Адрес <code>localhost</code></td><td>Публичный URL или IP-адрес</td></tr>
+      <tr><td>Настройки хранятся в локальном <code>.env</code></td><td>Настройки передаются в окружение сервера</td></tr>
+      <tr><td>Процесс можно остановить вместе с терминалом</td><td>Процесс должен продолжать работать без разработчика</td></tr>
+      </tbody>
+    </table>
+    <div class="callout">Деплой не изменяет назначение приложения. Он переносит конкретную версию кода в окружение, доступное пользователям.</div>
+    <hr>
+
+    <h2>Как устроен ручной деплой</h2>
+    <p>Скопировать исходники недостаточно. На сервере нужно заново подготовить всё, от чего зависит приложение.</p>
+    <p>Ручной деплой обычно состоит из следующих шагов:</p>
+    <ol>
+      <li>Получить нужную версию кода.</li>
+      <li>Установить Python и зависимости проекта.</li>
+      <li>Добавить переменные окружения и секреты.</li>
+      <li>Подготовить базу данных и выполнить миграции.</li>
+      <li>Запустить приложение на доступном порту.</li>
+      <li>Разрешить входящие соединения в сетевых настройках.</li>
+      <li>Проверить приложение с другого компьютера.</li>
+    </ol>
+    <p>На VPS эти действия выполняет разработчик. Render и другие PaaS-платформы автоматически получают код, устанавливают зависимости и запускают процесс.</p>
+    <p>Деплой считается завершённым не после успешной команды запуска, а после внешней проверки публичного адреса. Для этого у приложения есть health endpoint.</p>
+    <div class="callout warning"><b>Секреты не добавляют в Git.</b> Пароли, токены и ключи передают через серверный <code>.env</code> или настройки облачной платформы.</div>
+    <hr>
+
+    <h2>Базовые термины</h2>
+    <table>
+      <thead>
+      <tr><th>Термин</th><th>Что означает</th></tr>
+      </thead>
+      <tbody>
+      <tr><td>Деплой</td><td>Публикация работающей версии приложения</td></tr>
+      <tr><td>Release</td><td>Конкретная версия приложения, которую мы публикуем</td></tr>
+      <tr><td>Окружение</td><td>Код, настройки и программы, необходимые для запуска</td></tr>
+      <tr><td>Сервер</td><td>Компьютер, на котором приложение работает постоянно</td></tr>
+      <tr><td>VPS / VM</td><td>Виртуальный сервер в облаке</td></tr>
+      <tr><td>Порт</td><td>Номер сетевого входа, на котором приложение принимает запросы</td></tr>
+      <tr><td>Health check</td><td>Запрос, проверяющий, что приложение запущено и отвечает</td></tr>
+      <tr><td>PaaS</td><td>Платформа, которая сама запускает приложение из репозитория</td></tr>
+      <tr><td>Serverless</td><td>Платформа запускает код только тогда, когда приходит запрос</td></tr>
+      <tr><td>Production</td><td>Окружение, которым пользуются реальные пользователи</td></tr>
+      </tbody>
+    </table>
+    <hr>
+
+    <h2>Бесплатные варианты</h2>
+    <table>
+      <thead>
+      <tr><th>Вариант</th><th>Подходит для</th><th>Главное ограничение</th></tr>
+      </thead>
+      <tbody>
+      <tr><td>ngrok</td><td>Быстро показать localhost</td><td>Компьютер и приложение должны работать</td></tr>
+      <tr><td>GitHub Codespaces</td><td>Временная демонстрация из облачной среды</td><td>Среда останавливается при бездействии</td></tr>
+      <tr><td>Render / Koyeb</td><td>Один небольшой FastAPI-сервис</td><td>Бесплатный сервис засыпает</td></tr>
+      <tr><td>Vercel / AWS Lambda</td><td>Небольшой serverless API</td><td>Не запускают обычный Docker Compose</td></tr>
+      <tr><td>Cloud Run / Azure Container Apps</td><td>Один контейнер с API</td><td>Базы данных и очереди нужны отдельно</td></tr>
+      <tr><td>Northflank</td><td>Несколько учебных сервисов</td><td>Нужна банковская карта</td></tr>
+      <tr><td>Google Compute Engine</td><td>Очень маленький VPS</td><td>Бесплатная VM слишком слабая для всего проекта</td></tr>
+      <tr><td>Yandex Cloud</td><td>Ручной деплой на VPS</td><td>Стартовый грант действует 60 дней, затем VM оплачивается</td></tr>
+      </tbody>
+    </table>
+
+    <div class="callout"><b>В этой лекции:</b> ngrok используем для короткой демонстрации, Render — для самого простого облачного деплоя, Yandex Cloud — для ручной работы с настоящим Linux-сервером.</div>
+    <hr>
+
+    <h2>Вариант 1: ngrok</h2>
+    <p>ngrok создаёт публичный адрес и пересылает запросы на локальный порт.</p>
+    <div class="mermaid">
+      graph LR
+      USER[Пользователь] --> URL[Публичный URL ngrok]
+      URL --> API[FastAPI на localhost:8000]
+    </div>
+
+    <p>Запустите зависимости проекта, миграции и FastAPI:</p>
+    <pre><code class="language-bash">docker compose up -d --wait postgres mongo redis rabbitmq
+uv run alembic upgrade head
+uv run uvicorn app.main:app --host 127.0.0.1 --port 8000</code></pre>
+
+    <p>В другом терминале запустите туннель:</p>
+    <pre><code class="language-bash">ngrok config add-authtoken &lt;YOUR_AUTHTOKEN&gt;
+ngrok http 8000</code></pre>
+
+    <p>Откройте выданный адрес:</p>
+    <pre><code class="language-text">https://example.ngrok.app/docs
+https://example.ngrok.app/api/v1/health</code></pre>
+
+    <div class="callout warning"><b>ngrok — не сервер.</b> Если выключить компьютер, Uvicorn или ngrok, публичный адрес перестанет работать. Через туннель открываем только FastAPI, но не порты баз данных.</div>
+    <hr>
+
+    <h2>Вариант 2: Render</h2>
+    <p>Render забирает код из GitHub, устанавливает зависимости, запускает FastAPI и выдаёт HTTPS-адрес.</p>
+
+    <ol>
+      <li>Отправьте проект в репозиторий GitHub.</li>
+      <li>В Render создайте <b>New → Web Service</b> и подключите репозиторий.</li>
+      <li>Выберите бесплатный тип сервиса.</li>
+      <li>Заполните команды сборки и запуска.</li>
+    </ol>
+
+    <table>
+      <thead>
+      <tr><th>Настройка Render</th><th>Значение</th></tr>
+      </thead>
+      <tbody>
+      <tr><td>Language</td><td><code>Python 3</code></td></tr>
+      <tr><td>Build Command</td><td><code>uv sync --frozen</code></td></tr>
+      <tr><td>Start Command</td><td><code>uv run alembic upgrade head &amp;&amp; uv run uvicorn app.main:app --host 0.0.0.0 --port $PORT</code></td></tr>
+      </tbody>
+    </table>
+
+    <p>Добавьте переменные окружения:</p>
+    <pre class="language-dotenv"><code>DEBUG=false
+JWT_SECRET_KEY=replace-with-a-long-random-secret
+DATABASE_URL=sqlite+pysqlite:///./products.db</code></pre>
+
+    <p>После деплоя проверьте адрес <code>https://YOUR_SERVICE.onrender.com/api/v1/health</code>.</p>
+    <div class="callout warning">Это учебный вариант. Бесплатный Render засыпает после 15 минут без запросов, а локальный файл SQLite может исчезнуть после остановки или нового деплоя. Для постоянных данных нужна внешняя база.</div>
+    <hr>
+
+    <h2>Вариант 3: Yandex Cloud VM</h2>
+    <p>Yandex Compute Cloud предоставляет виртуальную машину. Здесь мы сами устанавливаем программы и запускаем приложение.</p>
+    <div class="callout warning"><b>Yandex Cloud не является постоянно бесплатным.</b> Новым клиентам доступен стартовый грант на 60 дней. Размер гранта зависит от страны, а после его окончания ресурсы оплачиваются по тарифу.</div>
+
+    <h3>1. Создаём сервер</h3>
+    <ol>
+      <li>Создайте платёжный аккаунт и проверьте стартовый грант в Yandex Cloud Billing.</li>
+      <li>Откройте <b>Compute Cloud → Виртуальные машины → Создать ВМ</b>.</li>
+      <li>Выберите Ubuntu 24.04 LTS и назначьте VM публичный IPv4-адрес.</li>
+      <li>Укажите имя пользователя и добавьте свой публичный SSH-ключ.</li>
+      <li>В группе безопасности разрешите TCP-порт <code>22</code> для SSH и <code>8000</code> для FastAPI.</li>
+      <li>Сохраните имя пользователя и публичный IP.</li>
+    </ol>
+
+    <p>SSH-ключ создаётся на вашем компьютере:</p>
+    <pre><code class="language-bash">ssh-keygen -t ed25519</code></pre>
+
+    <h3>2. Подключаемся</h3>
+    <pre><code class="language-bash">ssh USERNAME@SERVER_IP</code></pre>
+
+    <p>На сервере установите Git, curl и uv:</p>
+    <pre><code class="language-bash">sudo apt update
+sudo apt install -y git curl
+curl -LsSf https://astral.sh/uv/install.sh | sh
+source "$HOME/.local/bin/env"
+uv python install 3.14</code></pre>
+
+    <h3>3. Запускаем FastAPI</h3>
+    <pre><code class="language-bash">git clone REPOSITORY_URL products-api
+cd products-api
+uv sync --frozen
+nano .env</code></pre>
+
+    <p>Для первого запуска достаточно минимального <code>.env</code>:</p>
+    <pre class="language-dotenv"><code>DEBUG=false
+JWT_SECRET_KEY=replace-with-a-long-random-secret
+DATABASE_URL=sqlite+pysqlite:///./products.db</code></pre>
+
+    <p>Примените миграции и запустите приложение:</p>
+    <pre><code class="language-bash">uv run alembic upgrade head
+nohup uv run uvicorn app.main:app --host 0.0.0.0 --port 8000 &gt; app.log 2&gt;&amp;1 &amp;</code></pre>
+
+    <p>Теперь API доступен с вашего компьютера:</p>
+    <pre><code class="language-text">http://SERVER_IP:8000/docs
+http://SERVER_IP:8000/api/v1/health</code></pre>
+
+    <p>Если приложение не открылось, проверьте процесс и журнал:</p>
+    <pre><code class="language-bash">ps aux | grep uvicorn
+tail -n 50 app.log</code></pre>
+
+    <div class="callout warning"><b>Это минимальный учебный деплой, а не production.</b> Здесь пока нет домена, HTTPS, автоматического перезапуска и резервных копий. SQLite выбран, чтобы практика не превратилась в настройку нескольких баз и очередей.</div>
+    <hr>
+
+    <h2>Практика</h2>
+    <ol>
+      <li>Запустите Products API локально.</li>
+      <li>Откройте Swagger UI через ngrok.</li>
+      <li>Опубликуйте упрощённый API на Render.</li>
+      <li>Создайте Yandex Cloud VM и подключитесь к ней по SSH.</li>
+      <li>Запустите FastAPI на VM и откройте health endpoint по публичному IP.</li>
+    </ol>
+    <hr>
+
+    <h2>Что важно запомнить</h2>
+    <ul>
+      <li>ngrok временно открывает локальное приложение.</li>
+      <li>Render сам запускает приложение из GitHub, но ограничивает бесплатный сервис.</li>
+      <li>Serverless-платформы удобны для одного API, но не заменяют VPS.</li>
+      <li>На виртуальном сервере всё устанавливает и запускает разработчик.</li>
+      <li>Бесплатный тариф подходит для учёбы, но не гарантирует работу production-системы.</li>
+      <li>После любого деплоя нужно проверить health endpoint.</li>
+    </ul>
+
+    <p><b>Источники:</b>
+      <a href="https://fastapi.tiangolo.com/deployment/concepts/">FastAPI: Deployment Concepts</a>,
+      <a href="https://ngrok.com/docs/guides/share-localhost/quickstart">ngrok</a>,
+      <a href="https://render.com/docs/deploy-fastapi">Render: FastAPI</a>,
+      <a href="https://render.com/docs/free">Render Free</a>,
+      <a href="https://www.koyeb.com/docs/reference/instances">Koyeb</a>,
+      <a href="https://vercel.com/docs/frameworks/backend/fastapi">Vercel: FastAPI</a>,
+      <a href="https://cloud.google.com/run">Google Cloud Run</a>,
+      <a href="https://azure.microsoft.com/pricing/details/container-apps/">Azure Container Apps</a>,
+      <a href="https://northflank.com/docs/v1/application/billing/pricing-on-northflank">Northflank</a>,
+      <a href="https://docs.cloud.google.com/free/docs/free-cloud-features">Google Cloud Free Tier</a>,
+      <a href="https://yandex.cloud/ru/docs/billing/concepts/bonus-account">Yandex Cloud: стартовый грант</a>,
+      <a href="https://yandex.cloud/ru/docs/compute/quickstart/quick-create-linux">Yandex Cloud: создание Linux VM</a>,
+      <a href="https://yandex.cloud/ru/docs/vpc/operations/security-group-add-rule">Yandex Cloud: группа безопасности</a>.
+    </p>
+    <hr>
+  </db-content>
+</div>
+</body>
+</html>

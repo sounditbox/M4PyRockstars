@@ -2,7 +2,7 @@ from fastapi import APIRouter, HTTPException, status
 from sqlalchemy import select, func
 from sqlalchemy.exc import IntegrityError
 
-from app.dependencies import SessionDep, CategoryDep, get_category_or_404
+from app.dependencies import SessionDep, get_category_or_404
 from app.models import Category, Product
 from app.schemas import CategoryCreate, CategoryRead
 from app.security import AdminRoleDep
