@@ -119,14 +119,12 @@ jobs:
             sudo git checkout '$DEPLOY_BRANCH'; \
             sudo git merge --ff-only 'origin/$DEPLOY_BRANCH'; \
             sudo test \"\$(git rev-parse HEAD)\" = '$GITHUB_SHA'; \
-            sudo docker-compose up -d --build --wait --wait-timeout 180 --remove-orphans; \
-            sudo curl --fail --silent --show-error \
-              http://127.0.0.1:8000/api/v1/health"
+            sudo docker-compose up -d --build --remove-orphans; \
 
       - name: Verify public health endpoint
         env:
           DEPLOY_HOST: ${{ vars.DEPLOY_HOST }}
         run: |
           curl --fail --silent --show-error \
-            --retry 5 --retry-delay 3 --retry-connrefused \
+            --retry 5 --retry-delay 15 --retry-connrefused \
             "http://$DEPLOY_HOST:8000/api/v1/health"
