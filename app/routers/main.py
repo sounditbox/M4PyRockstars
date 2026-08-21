@@ -24,5 +24,5 @@ async def healthcheck():
 @router.get("/random/{number}", status_code=200, summary="Get random number",
             description="Get random number between 0 and number",
             tags=["Random"])
-async def random_n(number):
+async def random_n(number: int):
     return {"number": random.randint(0, number)}
